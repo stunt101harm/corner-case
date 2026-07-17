@@ -11,3 +11,12 @@ Per submission requirements: our team's experience using the TxLINE API — what
 - **21:31 UTC — Liked: on-chain infrastructure is solid and genuinely devnet-first.** TxLINE devnet program exists/executable; `daily_scores_roots` PDAs (9,232 B — 288 five-minute batch roots per day) posted daily going back 3+ weeks, with gaps matching World Cup rest days (Jul 8, 13, 16, 17) — i.e., real tournament data is posted to devnet. Historical roots are retained (June 27 still live), which makes replay-based demos possible.
 - **21:33 UTC — Docs gap: `validate_stat_v3` (multiproof: `leaves` + `multiproof_hashes` + `leaf_indices`) exists in the IDL and has a devnet example script (`subscription_scores_v3c.ts`), but the hosted documentation only describes legacy + V2.**
 - **Liked: `validate_stat_v2` is CPI-friendly by design** — declared `returns: bool` in the IDL (Anchor return-data), single PDA account, and `ScoresBatchSummary.fixture_id` is a typed field inside the proven payload, which makes fixture binding in a wrapping settlement program straightforward.
+
+## 2026-07-17 (keeper build — evening)
+
+- **Friction: `/scores/snapshot/{id}` semantics.** Returns an array of the latest record *per Action type* (37 entries for a finished match, mixed Seqs) rather than one merged state. The max-Seq entry of a finished match is a StatusId-less `disconnected` record, so "check the newest record's StatusId" silently misses finalisation — consumers must scan all entries for StatusId 100. Worth a docs callout.
+- **Friction: stream heartbeats are named SSE events** (`event: heartbeat` + JSON data), not comments — naive consumers JSON-parse them as score records. Also, heartbeat `Ts` is epoch **seconds** while record `Ts` is epoch **ms**.
+- **Inconsistency: `GameState` is numeric in `/fixtures/snapshot` but a string (`"scheduled"`) inside score records** — same field name, different types.
+- **Pre-coverage snapshot is `200 []`**, and WC fixtures emit Seq-1 `comment` records days before kickoff — fine once known, surprising first time.
+- **Liked: proof retention.** All 5 key-set proofs for a 2-day-old match fetch first-try in 140–380 ms each.
+- **Liked (tooling note): client-side, Anchor 0.31's standalone `coder.types.encode("NDimensionalStrategy", ...)` returns a broken zero-filled buffer** (the instruction coder encodes the same type correctly). Not TxLINE's bug, but integrators will hit it when building strategy bytes to store — hand-rolling the 18-byte borsh encoding is the workaround.

@@ -1,0 +1,5 @@
+# keeper-local runtime artifacts
+node_modules/
+state.json
+state.json.tmp
+*.log
