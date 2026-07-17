@@ -23,3 +23,6 @@ recordings/raw/
 
 # OS
 .DS_Store
+
+# Vendored reference repo (cloned, not ours)
+vendor/
