@@ -42,7 +42,7 @@ pub struct AcceptMarket<'info> {
     pub token_program: Program<'info, Token>,
 }
 
-pub fn handler(ctx: Context<AcceptMarket>) -> Result<()> {
+pub fn accept_market_handler(ctx: Context<AcceptMarket>) -> Result<()> {
     let now = Clock::get()?.unix_timestamp;
     let market = &ctx.accounts.market;
 

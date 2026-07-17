@@ -62,7 +62,7 @@ pub struct CreateMarket<'info> {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn handler(
+pub fn create_market_handler(
     ctx: Context<CreateMarket>,
     nonce: u64,
     fixture_id: i64,

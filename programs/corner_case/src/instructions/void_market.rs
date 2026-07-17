@@ -16,7 +16,6 @@ pub struct VoidMarket<'info> {
         mut,
         close = creator, // Market rent back to the creator who paid it.
         has_one = creator @ CornerCaseError::Unauthorized,
-        has_one = taker @ CornerCaseError::Unauthorized,
         seeds = [Market::SEED, market.creator.as_ref(), &market.nonce.to_le_bytes()],
         bump = market.bump,
     )]
@@ -27,8 +26,11 @@ pub struct VoidMarket<'info> {
     #[account(mut)]
     pub creator: UncheckedAccount<'info>,
 
-    /// CHECK: pinned to the stored `market.taker` by has_one; only used as
-    /// the ATA derivation authority below.
+    /// CHECK: pinned to the stored `market.taker` in the handler (not via
+    /// has_one: an *unmatched* market stores `Pubkey::default()` here, and a
+    /// constraint would mask the real "market is not matched" error). The
+    /// binding is enforced before any transfer; only used as the ATA
+    /// derivation authority below.
     pub taker: UncheckedAccount<'info>,
 
     #[account(address = USDC_MINT @ CornerCaseError::WrongMint)]
@@ -60,7 +62,7 @@ pub struct VoidMarket<'info> {
     pub token_program: Program<'info, Token>,
 }
 
-pub fn handler(ctx: Context<VoidMarket>) -> Result<()> {
+pub fn void_market_handler(ctx: Context<VoidMarket>) -> Result<()> {
     let now = Clock::get()?.unix_timestamp;
     let market = &ctx.accounts.market;
 
@@ -69,6 +71,15 @@ pub fn handler(ctx: Context<VoidMarket>) -> Result<()> {
     require!(
         market.state == MarketState::Matched,
         CornerCaseError::MarketNotMatched
+    );
+
+    // Taker binding (deferred from the accounts struct — see field docs):
+    // the taker_ata refund destination below derives from this account, so
+    // it must be the stored taker before a single token moves.
+    require_keys_eq!(
+        ctx.accounts.taker.key(),
+        market.taker,
+        CornerCaseError::TakerMismatch
     );
 
     // The delay is what makes this an escape hatch rather than a rug: a

@@ -43,7 +43,7 @@ pub struct CancelMarket<'info> {
     pub token_program: Program<'info, Token>,
 }
 
-pub fn handler(ctx: Context<CancelMarket>) -> Result<()> {
+pub fn cancel_market_handler(ctx: Context<CancelMarket>) -> Result<()> {
     let market = &ctx.accounts.market;
 
     // Once matched, the taker has money at stake — the exit paths are

@@ -30,6 +30,9 @@ pub enum CornerCaseError {
     #[msg("Only the market creator may do this")]
     Unauthorized,
 
+    #[msg("Taker account does not match the stored taker")]
+    TakerMismatch,
+
     #[msg("Void delay has not elapsed yet")]
     VoidDelayNotElapsed,
 
