@@ -7,6 +7,10 @@
  * settlement. Closed markets fall back to the settlement journal.
  */
 
+// Cloudflare Pages (@cloudflare/next-on-pages) requires dynamic routes to run
+// on the edge runtime; the page stays a pure client component.
+export const runtime = "edge";
+
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";

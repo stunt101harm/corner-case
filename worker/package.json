@@ -1,0 +1,21 @@
+{
+  "name": "@corner-case/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Cloudflare Worker port of the Corner Case relay (keeper/src/relay.ts) — judge-facing API for fixtures, replay, proofs, faucet and settlements",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@solana/spl-token": "^0.4.13",
+    "@solana/web3.js": "^1.98.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260714.1",
+    "typescript": "^5.6.3",
+    "wrangler": "^4.112.0"
+  }
+}

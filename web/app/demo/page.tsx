@@ -18,7 +18,7 @@ import { MarketCard } from "@/components/MarketCard";
 const STEPS = [
   {
     title: "Get test funds",
-    body: "Connect a wallet (Phantom/Solflare on devnet) and hit “Get test funds” in the header — 0.05 SOL and 1000 USDC-dev, in one click.",
+    body: "Connect a wallet (Phantom/Solflare on devnet) and hit “Get test funds” in the header — devnet SOL and 1000 USDC-dev, in one click.",
   },
   {
     title: "Bet on the demo match",

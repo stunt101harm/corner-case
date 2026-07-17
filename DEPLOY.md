@@ -1,52 +1,44 @@
-# Deployment (issue #18)
+# Deployment
 
-Three pieces. The program is already live on devnet; the other two need hosts.
+## Live
 
-## 1. Program — DONE ✅
+| Piece | Where |
+|---|---|
+| Program (devnet) | `J5ip9R8afPE8wB6EPXFBaXBpr78EtQfQeG3nNr681bBN` |
+| Relay API | https://corner-case-relay.h-dhaliwal2250.workers.dev (Cloudflare Worker `corner-case-relay`) |
+| Web app | https://corner-case.pages.dev (Cloudflare Pages `corner-case`) |
 
-Deployed to devnet: `J5ip9R8afPE8wB6EPXFBaXBpr78EtQfQeG3nNr681bBN`
-(upgrade authority = the local `~/.config/solana/id.json`; keypair backed up in `target/deploy/` — do not delete before the judging window ends).
+## Worker (`worker/`)
 
-## 2. Keeper + relay (always-on Node host — Railway or Render)
+```bash
+cd worker && npx wrangler deploy
+```
+- KV namespace `KV` (`9741c1bb6dc249ce8774278439ec47ab`): fixtures cache, guest JWT, faucet rate limits, settlements journal.
+- Secrets: `TXLINE_API_TOKEN`, `FAUCET_KEYPAIR` (burner `3Nsnfaow4ihMjgDq25KALAQgKJR6c1ata4ZN5xx3iiBs` — holds the USDC-dev stash + SOL; **top up SOL before Jul 20**, each judge drip = 0.02 SOL + 1000 USDC-dev), `SYNC_TOKEN` (mirrors `RELAY_SYNC_TOKEN` in repo `.env`).
+- `RPC_URL` var = MagicBlock devnet RPC — Cloudflare egress IPs are 403-blocked by `api.devnet.solana.com`. A keyed Helius devnet URL (as a secret) would be sturdier.
+- The recording ships inside the Worker bundle; `/api/replay/18241006` needs no storage.
 
-One service runs `keeper/`: the relay HTTP server (`npm run relay`) plus, during
-match hours, the recorder/settle-watch. Judges hit the relay for fixtures,
-replay streams, proofs, and the faucet.
+## Pages (`web/`)
 
-**Needs from harm:** a Railway (railway.com, GitHub OAuth) **or** Render
-(render.com) account + CLI login. Then:
+```bash
+cd web \
+  && NEXT_PUBLIC_RELAY_URL=https://corner-case-relay.h-dhaliwal2250.workers.dev \
+     NEXT_PUBLIC_RPC_URL=https://api.devnet.solana.com \
+     npx next-on-pages \
+  && npx wrangler pages deploy --branch main --commit-dirty=true
+```
+(`NEXT_PUBLIC_*` are build-time. next-on-pages pinned at 1.13.12 for Next 14.2.)
 
-- Root directory: `keeper/`
-- Build: `npm install`
-- Start: `npm run relay`
-- Env vars:
-  - `TXLINE_API_TOKEN` — from repo `.env` (long-lived TxLINE B2B token)
-  - `RELAY_PORT` — the host's `$PORT` (Railway/Render inject it; relay reads `RELAY_PORT`, so set `RELAY_PORT=$PORT` or map it)
-  - `RPC_URL` — `https://api.devnet.solana.com` (default; a Helius devnet URL avoids public-RPC rate limits if the faucet gets traffic)
-  - `FAUCET_KEYPAIR_PATH` — path to a devnet keypair that is the USDC-dev
-    mint authority and holds SOL for top-ups. **Do not put the main wallet on
-    a host.** Use a dedicated burner: `solana-keygen new -o faucet.json`, fund
-    it (`solana transfer <pubkey> 1 --url devnet`), then hand it the toy
-    mint's authority: `spl-token authorize Cx9Y63x8YN7x9UMFba4B1HdmmmH9QVZbvTZgz7k8kspy mint <faucet-pubkey> --url devnet`.
-    On the host, write the keypair JSON from a secret env var to a file at
-    boot and point `FAUCET_KEYPAIR_PATH` at it.
-- Persistent disk: not required (settlements journal is best-effort; recordings live on the laptop).
+## Local processes (this Mac, match days)
 
-## 3. Frontend (Vercel)
+- Recorder: `cd keeper && npx tsx src/record.ts 18143850 18257865 18257739`
+- Settle-watch: `cd keeper && npx tsx src/settle.ts`
+- After any local settlement: `node scripts/sync_settlements.mjs` pushes the journal to the Worker.
 
-**Needs from harm:** `npx vercel login` (or the Vercel dashboard) on an account.
+## Post-deploy checklist (verified 2026-07-18)
 
-- Root directory: `web/`
-- Framework preset: Next.js (zero config)
-- Env vars:
-  - `NEXT_PUBLIC_RELAY_URL` — the deployed relay URL from step 2
-  - `NEXT_PUBLIC_RPC_URL` — devnet RPC (public or Helius)
-
-## 4. Post-deploy checklist (clean browser, no wallet, no local state)
-
-- [ ] `/` shows markets incl. the pre-seeded open market + settled section
-- [ ] `/demo` replay runs (ticker fills, condition tracker moves)
-- [ ] Receipt page renders + "Re-verify in this browser" completes
-- [ ] Connect fresh wallet → "Get test funds" → balances appear → accept works
-- [ ] "Settle now" on a demo-fixture market lands a real devnet settlement
-- [ ] Update README with the live URLs
+- [x] `/` markets + settled section render (no wallet)
+- [x] `/demo` replay runs against the Worker
+- [x] Receipt renders; re-verify recomputes base-key legs (11 hashes ✓) and labels aggregation legs as on-chain-verified
+- [x] Faucet drips 0.02 SOL + 1000 USDC-dev; repeat call 429s
+- [x] Settlements journal synced (1 entry)

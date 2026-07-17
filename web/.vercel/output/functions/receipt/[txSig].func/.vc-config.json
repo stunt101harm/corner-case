@@ -1,0 +1,18 @@
+{
+  "runtime": "edge",
+  "name": "receipt/[txSig]",
+  "deploymentTarget": "v8-worker",
+  "entrypoint": "index.js",
+  "assets": [],
+  "framework": {
+    "slug": "nextjs",
+    "version": "14.2.35"
+  },
+  "environment": {
+    "__NEXT_BUILD_ID": "gC2Vskke00WajP7KyWAbD",
+    "NEXT_SERVER_ACTIONS_ENCRYPTION_KEY": "EUIjGXVPNdV8abOfU/RA3ldZCVDYrfRewGnsUMpCeKY=",
+    "__NEXT_PREVIEW_MODE_ID": "8510df26d70796baa4dfd5e35a816251",
+    "__NEXT_PREVIEW_MODE_ENCRYPTION_KEY": "2d2e6ba640d8442e813c9e84598839dd82bd04f9ce9b09185033eecb2a110348",
+    "__NEXT_PREVIEW_MODE_SIGNING_KEY": "4172d5654c300763259bd355f8a9bf3a911881ca7efc7f4da448c3090cfa69a7"
+  }
+}

@@ -10,7 +10,7 @@
  */
 
 import { useCallback, useRef, useState } from "react";
-import { verifyLegs, type LegResult } from "@/lib/merkle";
+import { isAggregationProof, verifyLegs, type LegResult } from "@/lib/merkle";
 import { statKeyName } from "@/lib/strategy";
 import { explorerAddress, explorerTx } from "@/lib/constants";
 import { deriveTxlineRootsPda, type PlainSettlePayload } from "@/lib/program";
@@ -38,6 +38,10 @@ export function MerkleChain({
   const totalSteps = legs ? legs.reduce((n, l) => n + l.steps.length + 1, 0) : 0;
   const done = legs !== null && revealed >= totalSteps && !running;
   const allOk = legs?.every((l) => l.ok) ?? false;
+  const aggregatedCount = legs?.filter((l) => l.aggregated).length ?? 0;
+  const recomputedHashes = legs
+    ? legs.filter((l) => !l.aggregated).reduce((n, l) => n + l.steps.length, 0)
+    : 0;
 
   const reverify = useCallback(async (): Promise<void> => {
     if (timerRef.current) clearInterval(timerRef.current);
@@ -90,35 +94,54 @@ export function MerkleChain({
           }`}
         >
           {allOk
-            ? `✓ Recomputed ${totalSteps} sha256 hashes in this browser — every node matches the proof.`
+            ? `✓ Recomputed ${recomputedHashes} sha256 hash${recomputedHashes === 1 ? "" : "es"} in this browser — every node matches the proof.` +
+              (aggregatedCount > 0
+                ? ` ${aggregatedCount} period-scoped stat${aggregatedCount > 1 ? "s" : ""} use TxLINE's aggregation proof, verified on-chain in this transaction.`
+                : "")
             : "✕ Recomputation mismatch — this proof does not check out."}
         </p>
       )}
 
       <div className="mt-4 space-y-1">
         {/* Leg 1: stat leaves */}
-        {payload.stats.map((stat, si) => (
-          <div key={stat.key}>
-            <NodeCard
-              tone="leaf"
-              title={`Stat leaf · ${statKeyName(stat.key, home, away)}`}
-              subtitle={`key ${stat.key} = ${stat.value} · period ${stat.period}${stat.period === 100 ? " (game finalised — check gate #2)" : ""}`}
-              hex={legs?.[si]?.steps[0]?.currentHex}
-              checked={legs !== null && revealed > legOffset(si)}
-              ok={legs?.[si]?.ok}
-            />
-            {(legs?.[si]?.steps ?? skeletonSteps(payload.stats[si].proof)).map((step, i) => (
-              <ProofStep
-                key={i}
-                siblingHex={step.siblingHex}
-                isRightSibling={step.isRightSibling}
-                resultHex={step.resultHex}
-                revealed={legs !== null && revealed > legOffset(si) + i + 1}
+        {payload.stats.map((stat, si) => {
+          const aggregated = isAggregationProof(payload.stats[si].proof);
+          return (
+            <div key={stat.key}>
+              <NodeCard
+                tone="leaf"
+                title={`Stat leaf · ${statKeyName(stat.key, home, away)}`}
+                subtitle={`key ${stat.key} = ${stat.value} · period ${stat.period}${stat.period === 100 ? " (game finalised — check gate #2)" : ""}`}
+                hex={legs?.[si]?.steps[0]?.currentHex}
+                checked={legs !== null && revealed > legOffset(si)}
                 ok={legs?.[si]?.ok}
               />
-            ))}
-          </div>
-        ))}
+              {aggregated ? (
+                // Period-scoped stats are proven via TxLINE's aggregation
+                // scheme (structured parameter nodes, not sibling hashes) —
+                // there is nothing to recompute client-side. The guarantee is
+                // the validateStatV2 CPI in the settlement tx itself.
+                <div className="ml-6 border-l border-pitch-700/60 py-2 pl-4">
+                  <p className="font-mono text-xs text-amber-300/90">
+                    ⛓ period-scoped aggregation proof — interpreted and verified
+                    by TxLINE&apos;s program on-chain in this transaction ✓
+                  </p>
+                </div>
+              ) : (
+                (legs?.[si]?.steps ?? skeletonSteps(payload.stats[si].proof)).map((step, i) => (
+                  <ProofStep
+                    key={i}
+                    siblingHex={step.siblingHex}
+                    isRightSibling={step.isRightSibling}
+                    resultHex={step.resultHex}
+                    revealed={legs !== null && revealed > legOffset(si) + i + 1}
+                    ok={legs?.[si]?.ok}
+                  />
+                ))
+              )}
+            </div>
+          );
+        })}
 
         <NodeCard
           tone="root"

@@ -8,6 +8,10 @@
  * so they survive relay/RPC downtime.
  */
 
+// Cloudflare Pages (@cloudflare/next-on-pages) requires dynamic routes to run
+// on the edge runtime; the page stays a pure client component.
+export const runtime = "edge";
+
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";

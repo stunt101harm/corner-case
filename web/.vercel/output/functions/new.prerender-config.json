@@ -1,0 +1,29 @@
+{
+  "type": "Prerender",
+  "expiration": false,
+  "isDynamicRoute": false,
+  "htmlSize": 8556,
+  "group": 2,
+  "bypassToken": "8510df26d70796baa4dfd5e35a816251",
+  "experimentalBypassFor": [
+    {
+      "type": "header",
+      "key": "Next-Action"
+    },
+    {
+      "type": "header",
+      "key": "content-type",
+      "value": "multipart/form-data;.*"
+    }
+  ],
+  "fallback": {
+    "type": "FileFsRef",
+    "mode": 33188,
+    "fsPath": "new.prerender-fallback.html"
+  },
+  "initialHeaders": {
+    "x-next-cache-tags": "_N_T_/layout,_N_T_/new/layout,_N_T_/new/page,_N_T_/new",
+    "vary": "RSC, Next-Router-State-Tree, Next-Router-Prefetch"
+  },
+  "allowQuery": []
+}

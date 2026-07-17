@@ -1,0 +1,11 @@
+# Cloudflare Pages config for the Corner Case frontend.
+# Build first (env vars are BUILD-time — they bake into the client bundle):
+#   NEXT_PUBLIC_RELAY_URL=https://corner-case-relay.h-dhaliwal2250.workers.dev \
+#   NEXT_PUBLIC_RPC_URL=https://api.devnet.solana.com \
+#   npx next-on-pages
+# then deploy:
+#   npx wrangler pages deploy
+name = "corner-case"
+pages_build_output_dir = ".vercel/output/static"
+compatibility_date = "2026-07-01"
+compatibility_flags = ["nodejs_compat"]

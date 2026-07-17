@@ -1,0 +1,29 @@
+name = "corner-case-relay"
+main = "src/index.ts"
+compatibility_date = "2026-07-01"
+compatibility_flags = ["nodejs_compat"]
+
+kv_namespaces = [
+  { binding = "KV", id = "9741c1bb6dc249ce8774278439ec47ab" }
+]
+
+# The committed semi recording is bundled into the Worker as a text module —
+# /api/replay streams it with no filesystem or origin round-trip.
+[[rules]]
+type = "Text"
+globs = ["**/*.sse"]
+fallthrough = true
+
+[observability]
+enabled = true
+
+# api.devnet.solana.com (and Triton's devnet.rpcpool.com) 403 Cloudflare
+# egress IPs ("Your IP or provider is blocked") — the faucet uses MagicBlock's
+# public devnet RPC instead.
+[vars]
+RPC_URL = "https://rpc.magicblock.app/devnet"
+
+# Secrets (set via `wrangler secret put`, never in this file):
+#   TXLINE_API_TOKEN — long-lived TxLINE B2B token (X-Api-Token header)
+#   FAUCET_KEYPAIR   — JSON array secret key of the devnet faucet wallet
+#   SYNC_TOKEN       — shared secret for POST /api/settlements (laptop → cloud journal sync)

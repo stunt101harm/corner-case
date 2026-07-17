@@ -20,3 +20,9 @@ Per submission requirements: our team's experience using the TxLINE API — what
 - **Pre-coverage snapshot is `200 []`**, and WC fixtures emit Seq-1 `comment` records days before kickoff — fine once known, surprising first time.
 - **Liked: proof retention.** All 5 key-set proofs for a 2-day-old match fetch first-try in 140–380 ms each.
 - **Liked (tooling note): client-side, Anchor 0.31's standalone `coder.types.encode("NDimensionalStrategy", ...)` returns a broken zero-filled buffer** (the instruction coder encodes the same type correctly). Not TxLINE's bug, but integrators will hit it when building strategy bytes to store — hand-rolling the 18-byte borsh encoding is the workaround.
+
+## 2026-07-18 (deployment + receipt work)
+
+- **Discovery (docs gap, genuinely interesting): period-scoped stat keys use an undocumented aggregation-proof scheme.** For base keys (1–8), `statProofs` entries are ordinary sibling hashes — `sha256(borsh(ScoreStat))` folded with `sha256(left‖right)` reproduces `eventStatRoot` exactly (we recompute this in the browser on our receipts). For period-prefixed keys (1001…, 3005…), the entries are *structured parameter nodes* (sentinel `0x01`/`0xff` padding + encoded ranges, 2 nodes vs 5) that only `validateStatV2` knows how to interpret. Nothing in the docs mentions the distinction; client-side verifiers will hit it. It settles on-chain flawlessly — we'd just love the scheme documented.
+- **Friction (not TxLINE's fault but relevant to Solana devnet integrations): Cloudflare Workers egress IPs are blocked by `api.devnet.solana.com`** (403 "IP or provider blocked"), so our Worker faucet uses a third-party devnet RPC.
+- **Liked: the whole judge-facing surface (proofs, replays via `/scores/historical`, fixtures) works fine from serverless** — the API is plain HTTPS + tokens, no SDK lock-in.

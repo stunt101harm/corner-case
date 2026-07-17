@@ -20,9 +20,13 @@ Three components (see [PLAN.md](PLAN.md) for the full implementation plan):
 2. **Keeper (TypeScript)** — TxLINE auth, fixture sync, SSE scores consumer, proof fetcher, auto-settlement, replay mode
 3. **Frontend (Next.js)** — market builder, open markets, live match view with SSE ticker, settlement receipt UI
 
-## Status
+## Live
 
-🚧 Hackathon build in progress — deadline July 19, 2026 23:59 UTC. Track progress in the [issues](../../issues).
+- **App:** https://corner-case.pages.dev
+- **Relay API:** https://corner-case-relay.h-dhaliwal2250.workers.dev
+- **Program (devnet):** [`J5ip9R8afPE8wB6EPXFBaXBpr78EtQfQeG3nNr681bBN`](https://explorer.solana.com/address/J5ip9R8afPE8wB6EPXFBaXBpr78EtQfQeG3nNr681bBN?cluster=devnet)
+
+🚧 Hackathon build — deadline July 19, 2026 23:59 UTC. Progress in the [issues](../../issues).
 
 ## License
 
