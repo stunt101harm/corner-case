@@ -1,0 +1,25 @@
+# Node
+node_modules/
+.env
+.env.local
+*.log
+
+# Next.js
+.next/
+out/
+
+# Anchor / Solana
+target/
+.anchor/
+test-ledger/
+**/*.rs.bk
+
+# Keys — never commit
+*-keypair.json
+id.json
+
+# Recorded data (large raw captures kept out; curated fixtures live in /fixtures)
+recordings/raw/
+
+# OS
+.DS_Store
