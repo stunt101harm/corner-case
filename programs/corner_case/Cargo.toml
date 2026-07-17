@@ -1,0 +1,26 @@
+[package]
+name = "corner_case"
+version = "0.1.0"
+description = "Corner Case — trustless P2P prop bets settled by TxLINE Merkle proofs"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "corner_case"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+# Local-validator test build: swaps the pinned USDC-dev mint for the committed
+# throwaway test mint (tests/fixtures/test-mint.json) and shortens VOID_DELAY_SECS
+# to 5s so the void escape hatch is testable in seconds. Never ship this feature
+# to devnet — the default build pins the real USDC-dev mint.
+localtest = []
+
+[dependencies]
+anchor-lang = "0.31.1"
+anchor-spl = "0.31.1"
