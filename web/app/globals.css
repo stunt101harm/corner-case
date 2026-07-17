@@ -1,0 +1,56 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Dark pitch: near-black green with faint mowing stripes — visible enough to
+   set the scene in screenshots, quiet enough to read white text over. */
+body {
+  @apply bg-pitch-950 text-chalk antialiased;
+  background-image: repeating-linear-gradient(
+      90deg,
+      transparent 0px,
+      transparent 90px,
+      rgba(233, 245, 236, 0.015) 90px,
+      rgba(233, 245, 236, 0.015) 180px
+    );
+  min-height: 100vh;
+}
+
+/* Wallet-adapter button, restyled into the theme. */
+.wallet-adapter-button {
+  @apply !h-9 !rounded-lg !bg-turf-600 !px-4 !text-sm !font-semibold !text-pitch-950 !transition-colors;
+  font-family: inherit !important;
+}
+.wallet-adapter-button:hover {
+  @apply !bg-turf-500;
+}
+.wallet-adapter-button[disabled] {
+  @apply !bg-pitch-700 !text-chalk/50;
+}
+.wallet-adapter-modal-wrapper {
+  @apply !bg-pitch-800;
+}
+.wallet-adapter-modal-button-close {
+  @apply !bg-pitch-700;
+}
+
+@layer components {
+  .card {
+    @apply rounded-xl border border-pitch-600/60 bg-pitch-900/80 p-4;
+  }
+  .btn {
+    @apply inline-flex h-9 items-center justify-center gap-1.5 rounded-lg px-4 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40;
+  }
+  .btn-primary {
+    @apply btn bg-turf-600 text-pitch-950 hover:bg-turf-500;
+  }
+  .btn-ghost {
+    @apply btn border border-pitch-500 text-chalk hover:border-turf-600 hover:text-turf-300;
+  }
+  .label {
+    @apply text-[11px] font-semibold uppercase tracking-wider text-chalk/50;
+  }
+  .mono-hex {
+    @apply break-all font-mono text-[11px] leading-relaxed text-chalk/70;
+  }
+}

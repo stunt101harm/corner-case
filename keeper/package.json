@@ -7,11 +7,16 @@
   "scripts": {
     "record": "tsx src/record.ts",
     "replay": "tsx src/replay.ts",
+    "relay": "tsx src/relay-server.ts",
     "smoke": "tsx src/record.ts --smoke && tsx src/smoke.ts",
     "typecheck": "tsc --noEmit"
   },
   "engines": {
     "node": ">=20"
+  },
+  "dependencies": {
+    "@solana/spl-token": "^0.4.13",
+    "@solana/web3.js": "^1.98.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
