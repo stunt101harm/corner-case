@@ -57,6 +57,12 @@ pub struct Market {
     /// Opaque TxLINE strategy bytes (see struct docs). Variable length —
     /// account space is allocated from the instruction arg at init.
     pub strategy: Vec<u8>,
+    /// Check gate #5: the ordered TxLINE stat keys the strategy's leaf
+    /// indices refer to (index i in the strategy == key stat_keys[i]).
+    /// Settlement refuses a proof whose leaves don't match this list exactly
+    /// — without it, a valid proof of the WRONG stats (goals instead of
+    /// corners) could flip the payout. 1–5 keys (TxLINE's per-proof limit).
+    pub stat_keys: Vec<u32>,
 }
 
 impl Market {
@@ -68,8 +74,9 @@ impl Market {
     /// + stake 8 + creator_side 1 + state 1 + nonce 8 + bump 1 + created_at 8.
     pub const BASE_LEN: usize = 32 + 32 + 8 + 2 + 8 + 8 + 1 + 1 + 8 + 1 + 8;
 
-    /// Full account size for a given strategy length.
-    pub const fn space(strategy_len: usize) -> usize {
-        8 + Self::BASE_LEN + 4 + strategy_len
+    /// Full account size for given strategy and stat-key lengths (both vecs
+    /// carry a 4-byte borsh length prefix).
+    pub const fn space(strategy_len: usize, stat_keys_len: usize) -> usize {
+        8 + Self::BASE_LEN + 4 + strategy_len + 4 + stat_keys_len * 4
     }
 }

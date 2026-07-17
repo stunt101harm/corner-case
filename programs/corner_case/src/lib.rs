@@ -14,6 +14,7 @@ pub mod constants;
 pub mod errors;
 pub mod instructions;
 pub mod state;
+pub mod txoracle;
 
 use instructions::*;
 
@@ -35,6 +36,7 @@ pub mod corner_case {
         creator_side: bool,
         stake: u64,
         strategy: Vec<u8>,
+        stat_keys: Vec<u32>,
     ) -> Result<()> {
         create_market_handler(
             ctx,
@@ -45,6 +47,7 @@ pub mod corner_case {
             creator_side,
             stake,
             strategy,
+            stat_keys,
         )
     }
 
@@ -64,10 +67,15 @@ pub mod corner_case {
         void_market_handler(ctx)
     }
 
-    /// STUB — always errors with SettlementNotImplemented. The spike-decided
-    /// validation path (CPI / introspection / in-program Merkle) lands here;
-    /// see instructions/settle_market.rs for the fixed implementation contract.
-    pub fn settle_market(ctx: Context<SettleMarket>) -> Result<()> {
-        settle_market_handler(ctx)
+    /// Permissionless settlement: CPI into TxLINE's `validateStatV2` with
+    /// the STORED strategy against the caller-selected daily root, read the
+    /// verdict from return data, pay the winning side. Five check gates —
+    /// see instructions/settle_market.rs for the full story.
+    pub fn settle_market(
+        ctx: Context<SettleMarket>,
+        epoch_day: u16,
+        payload: txoracle::StatValidationInput,
+    ) -> Result<()> {
+        settle_market_handler(ctx, epoch_day, payload)
     }
 }

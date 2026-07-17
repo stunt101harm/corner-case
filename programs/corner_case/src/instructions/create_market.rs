@@ -16,7 +16,8 @@ use crate::{constants::*, errors::CornerCaseError, state::*};
     kickoff_ts: i64,
     creator_side: bool,
     stake: u64,
-    strategy: Vec<u8>
+    strategy: Vec<u8>,
+    stat_keys: Vec<u32>
 )]
 pub struct CreateMarket<'info> {
     #[account(mut)]
@@ -27,7 +28,7 @@ pub struct CreateMarket<'info> {
     #[account(
         init,
         payer = creator,
-        space = Market::space(strategy.len()),
+        space = Market::space(strategy.len(), stat_keys.len()),
         seeds = [Market::SEED, creator.key().as_ref(), &nonce.to_le_bytes()],
         bump,
     )]
@@ -71,6 +72,7 @@ pub fn create_market_handler(
     creator_side: bool,
     stake: u64,
     strategy: Vec<u8>,
+    stat_keys: Vec<u32>,
 ) -> Result<()> {
     let now = Clock::get()?.unix_timestamp;
 
@@ -83,6 +85,14 @@ pub fn create_market_handler(
     require!(
         (MIN_STRATEGY_LEN..=MAX_STRATEGY_LEN).contains(&strategy.len()),
         CornerCaseError::StrategyLengthOutOfBounds
+    );
+
+    // Check gate #5's other half: the ordered stat keys the strategy indices
+    // refer to must be pinned now, or settlement can't refuse a wrong-stat
+    // proof later. TxLINE's stat-validation endpoint serves 1-5 keys.
+    require!(
+        (1..=5).contains(&stat_keys.len()),
+        CornerCaseError::StatKeysCountOutOfBounds
     );
 
     // A market created after kickoff could be accepted mid-match against
@@ -119,6 +129,7 @@ pub fn create_market_handler(
     market.bump = ctx.bumps.market;
     market.created_at = now;
     market.strategy = strategy;
+    market.stat_keys = stat_keys;
 
     Ok(())
 }

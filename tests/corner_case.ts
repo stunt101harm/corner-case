@@ -112,6 +112,7 @@ describe("corner_case", () => {
     kickoffTs?: BN;
     stake?: BN;
     strategy?: Buffer;
+    statKeys?: number[];
     useMint?: PublicKey;
     useCreatorAta?: PublicKey;
   }) {
@@ -130,7 +131,8 @@ describe("corner_case", () => {
         kickoffTs,
         true, // creator bets TRUE
         opts?.stake ?? STAKE,
-        opts?.strategy ?? STRATEGY
+        opts?.strategy ?? STRATEGY,
+        opts?.statKeys ?? [1, 2]
       )
       .accounts({
         creator: creator.publicKey,
@@ -359,23 +361,6 @@ describe("corner_case", () => {
     });
   });
 
-  // ---- settle stub -------------------------------------------------------
-
-  describe("settle_market (stub)", () => {
-    it("always errors with SettlementNotImplemented", async () => {
-      const { market, escrow } = await createMarket();
-      await acceptMarket(market, escrow, taker, takerAta);
-
-      await expectErr(
-        program.methods
-          .settleMarket()
-          .accounts({ caller: creator.publicKey, market } as any)
-          .rpc(),
-        "SettlementNotImplemented"
-      );
-    });
-  });
-
   // ---- cancel ------------------------------------------------------------
 
   describe("cancel_market", () => {
@@ -513,6 +498,321 @@ describe("corner_case", () => {
       expect(await tokenBalance(takerAta)).to.equal(takerBefore);
       await assertClosed(market, "market");
       await assertClosed(escrow, "escrow");
+    });
+  });
+
+  // ---- settle ------------------------------------------------------------
+  //
+  // Deterministic AND real: the local validator has TxLINE's txoracle program
+  // and the epoch-day-20649 daily_scores_roots account CLONED from devnet
+  // (Anchor.toml [test.validator]), and these tests replay committed real
+  // Merkle proofs from the England v Argentina semifinal (2026-07-15,
+  // fixture 18241006, final seq 962: England 1-2 Argentina). No mocks —
+  // every settlement here runs the full production validation path.
+
+  describe("settle_market", () => {
+    const TXORACLE_ID = new PublicKey(
+      "6pW64gN1s2uqjHkn1unFeEjAwJkPGHoppGvS715wyP2J"
+    );
+    const SEMI_FIXTURE = new BN(18241006);
+    const SEMI_EPOCH_DAY = 20649;
+
+    // Hand-rolled borsh for NDimensionalStrategy. (Anchor 0.31's standalone
+    // `coder.types.encode` returns a broken zero-filled buffer for this
+    // nested enum type — while the instruction coder handles the identical
+    // type fine. 18 explicit bytes beat a coder bug.)
+    //
+    // Layout: geometric_targets vec len u32 | distance_predicate option u8 |
+    // discrete_predicates vec len u32 | per predicate: variant u8
+    // (0=Single{index u8}, 1=Binary{index_a u8, index_b u8, op u8
+    // (0=Add,1=Subtract)}) | threshold i32 LE | comparison u8
+    // (0=GreaterThan,1=LessThan,2=EqualTo).
+    const CMP = { gt: 0, lt: 1, eq: 2 } as const;
+    const OP = { add: 0, sub: 1 } as const;
+
+    function binaryStrategy(
+      indexA: number,
+      indexB: number,
+      op: number,
+      threshold: number,
+      cmp: number
+    ): Buffer {
+      const b = Buffer.alloc(4 + 1 + 4 + 1 + 3 + 4 + 1);
+      let o = 0;
+      b.writeUInt32LE(0, o); o += 4;        // geometric_targets: empty
+      b.writeUInt8(0, o); o += 1;           // distance_predicate: None
+      b.writeUInt32LE(1, o); o += 4;        // discrete_predicates: 1 entry
+      b.writeUInt8(1, o); o += 1;           // variant: Binary
+      b.writeUInt8(indexA, o); o += 1;
+      b.writeUInt8(indexB, o); o += 1;
+      b.writeUInt8(op, o); o += 1;
+      b.writeInt32LE(threshold, o); o += 4;
+      b.writeUInt8(cmp, o);
+      return b;
+    }
+
+    /** away − home goals > 0 — TRUE for England 1-2 Argentina (keys [1,2]). */
+    const STRAT_AWAY_WINS = binaryStrategy(1, 0, OP.sub, 0, CMP.gt);
+
+    /** home − away goals > 0 — FALSE for this match. */
+    const STRAT_HOME_WINS = binaryStrategy(0, 1, OP.sub, 0, CMP.gt);
+
+    function loadProof(name: string) {
+      return JSON.parse(
+        fs.readFileSync(path.join(__dirname, "..", "fixtures", name), "utf-8")
+      );
+    }
+    const finalProof = loadProof("proof_18241006_seq962_k1-2.json");
+    const halftimeProof = loadProof("proof_18241006_seq425_halftime_k1-2.json");
+
+    /** API response → the typed payload our settle_market instruction takes. */
+    function buildPayload(val: any) {
+      const mapProof = (arr: any[]) =>
+        arr.map((n) => ({
+          hash: Array.from(n.hash) as number[],
+          isRightSibling: n.isRightSibling,
+        }));
+      return {
+        ts: new BN(val.summary.updateStats.minTimestamp),
+        fixtureSummary: {
+          fixtureId: new BN(val.summary.fixtureId),
+          updateStats: {
+            updateCount: val.summary.updateStats.updateCount,
+            minTimestamp: new BN(val.summary.updateStats.minTimestamp),
+            maxTimestamp: new BN(val.summary.updateStats.maxTimestamp),
+          },
+          eventsSubTreeRoot: Array.from(val.summary.eventStatsSubTreeRoot),
+        },
+        fixtureProof: mapProof(val.subTreeProof),
+        mainTreeProof: mapProof(val.mainTreeProof),
+        eventStatRoot: Array.from(val.eventStatRoot),
+        stats: val.statsToProve.map((s: any, i: number) => ({
+          stat: { key: s.key, value: s.value, period: s.period },
+          statProof: mapProof(val.statProofs[i]),
+        })),
+      };
+    }
+
+    function rootsPdaFor(epochDay: number): PublicKey {
+      const le = Buffer.alloc(2);
+      le.writeUInt16LE(epochDay);
+      return PublicKey.findProgramAddressSync(
+        [Buffer.from("daily_scores_roots"), le],
+        TXORACLE_ID
+      )[0];
+    }
+
+    /** Create+accept a semifinal market with explicit fixture/epoch values. */
+    async function createSemiMarket(opts?: {
+      strategy?: Buffer;
+      statKeys?: number[];
+      fixtureId?: BN;
+      epochDay?: number;
+      creatorSide?: boolean;
+    }) {
+      const nonce = nextNonce();
+      const kickoffTs = new BN((await chainNow()) + 3600);
+      const market = marketPda(creator.publicKey, nonce);
+      const escrow = escrowAta(market);
+      await program.methods
+        .createMarket(
+          nonce,
+          opts?.fixtureId ?? SEMI_FIXTURE,
+          opts?.epochDay ?? SEMI_EPOCH_DAY,
+          kickoffTs,
+          opts?.creatorSide ?? true,
+          STAKE,
+          opts?.strategy ?? STRAT_AWAY_WINS,
+          opts?.statKeys ?? [1, 2]
+        )
+        .accounts({
+          creator: creator.publicKey,
+          market,
+          mint,
+          creatorAta,
+          escrow,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        } as any)
+        .rpc();
+      await acceptMarket(market, escrow, taker, takerAta);
+      return { market, escrow };
+    }
+
+    function settleIx(
+      market: PublicKey,
+      escrow: PublicKey,
+      payload: any,
+      opts?: { epochDay?: number; rootsPda?: PublicKey; signer?: Keypair }
+    ) {
+      const epochDay = opts?.epochDay ?? SEMI_EPOCH_DAY;
+      const signer = opts?.signer ?? outsider; // default: NOT a party — settlement is permissionless
+      return program.methods
+        .settleMarket(epochDay, payload)
+        .accounts({
+          caller: signer.publicKey,
+          market,
+          creator: creator.publicKey,
+          taker: taker.publicKey,
+          mint,
+          creatorAta,
+          takerAta,
+          escrow,
+          txlineRoots: opts?.rootsPda ?? rootsPdaFor(epochDay),
+          txlineProgram: TXORACLE_ID,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        } as any)
+        .preInstructions([
+          anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({
+            units: 1_400_000,
+          }),
+        ])
+        .signers([signer]);
+    }
+
+    it("settles TRUE to the side that bet TRUE — full production path, called by an outsider", async () => {
+      const { market, escrow } = await createSemiMarket(); // creator bets TRUE on away-wins
+      const creatorBefore = await tokenBalance(creatorAta);
+      const payload = buildPayload(finalProof);
+
+      await settleIx(market, escrow, payload).rpc();
+
+      // Creator (TRUE side) sweeps both stakes; both accounts closed.
+      expect(await tokenBalance(creatorAta)).to.equal(
+        creatorBefore + BigInt(STAKE.muln(2).toString())
+      );
+      await assertClosed(market, "market");
+      await assertClosed(escrow, "escrow");
+    });
+
+    it("settles FALSE to the other side — CPI success is NOT read as predicate-true", async () => {
+      const { market, escrow } = await createSemiMarket({
+        strategy: STRAT_HOME_WINS, // evaluates FALSE for 1-2
+      });
+      const takerBefore = await tokenBalance(takerAta);
+
+      await settleIx(market, escrow, buildPayload(finalProof)).rpc();
+
+      // The VALID proof of a FALSE predicate pays the taker.
+      expect(await tokenBalance(takerAta)).to.equal(
+        takerBefore + BigInt(STAKE.muln(2).toString())
+      );
+      await assertClosed(market, "market");
+    });
+
+    it("gate #2 (finality): rejects a mid-match proof — period 3 != 100", async () => {
+      const { market, escrow } = await createSemiMarket();
+      await expectErr(
+        settleIx(market, escrow, buildPayload(halftimeProof)).rpc(),
+        "ProofNotFinal"
+      );
+    });
+
+    it("gate #4 (fixture binding): a valid proof for a DIFFERENT fixture cannot settle", async () => {
+      const { market, escrow } = await createSemiMarket({
+        fixtureId: new BN(99999999), // market bet on some other match
+      });
+      await expectErr(
+        settleIx(market, escrow, buildPayload(finalProof)).rpc(),
+        "FixtureMismatch"
+      );
+    });
+
+    it("gate #5 (stat-key binding): a valid proof of the WRONG stats cannot settle", async () => {
+      const { market, escrow } = await createSemiMarket({
+        statKeys: [7, 8], // strategy written against corners...
+      });
+      await expectErr(
+        // ...but the keeper proves goals (keys 1,2). Without gate #5 this
+        // valid proof would evaluate the corners predicate against goal
+        // values and could flip the payout.
+        settleIx(market, escrow, buildPayload(finalProof)).rpc(),
+        "StatKeysMismatch"
+      );
+    });
+
+    it("gate #3 (epoch window): rejects an epoch_day outside {stored, stored+1}", async () => {
+      const { market, escrow } = await createSemiMarket({
+        epochDay: SEMI_EPOCH_DAY - 2,
+      });
+      await expectErr(
+        settleIx(market, escrow, buildPayload(finalProof)).rpc(),
+        "EpochDayOutOfRange"
+      );
+    });
+
+    it("rejects a corrupted proof — TxLINE's validation hard-errors the whole tx", async () => {
+      const { market, escrow } = await createSemiMarket();
+      const payload = buildPayload(finalProof);
+      payload.stats[0].statProof[0].hash[0] ^= 0xff;
+      try {
+        await settleIx(market, escrow, payload).rpc();
+        assert.fail("expected the corrupted proof to fail");
+      } catch (e: any) {
+        // The error surfaces from the INNER txoracle program (InvalidStatProof).
+        expect(String(e)).to.match(/InvalidStatProof|6023|custom program error/i);
+      }
+      // Market untouched — still settleable with the honest proof.
+      await settleIx(market, escrow, buildPayload(finalProof)).rpc();
+      await assertClosed(market, "market");
+    });
+
+    it("rejects a mismatched roots account for the claimed epoch_day", async () => {
+      const { market, escrow } = await createSemiMarket();
+      await expectErr(
+        settleIx(market, escrow, buildPayload(finalProof), {
+          rootsPda: rootsPdaFor(SEMI_EPOCH_DAY + 1), // exists-or-not, it's not the arg's PDA
+        }).rpc(),
+        "InvalidRootsAccount"
+      );
+    });
+
+    it("cannot settle an unmatched market", async () => {
+      // Created but never accepted.
+      const nonce = nextNonce();
+      const kickoffTs = new BN((await chainNow()) + 3600);
+      const market = marketPda(creator.publicKey, nonce);
+      const escrow = escrowAta(market);
+      await program.methods
+        .createMarket(nonce, SEMI_FIXTURE, SEMI_EPOCH_DAY, kickoffTs, true, STAKE, STRAT_AWAY_WINS, [1, 2])
+        .accounts({
+          creator: creator.publicKey,
+          market,
+          mint,
+          creatorAta,
+          escrow,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        } as any)
+        .rpc();
+
+      // The taker constraint (default pubkey) fails account resolution before
+      // the state check can even run — either way, no settlement.
+      try {
+        await settleIx(market, escrow, buildPayload(finalProof), {}).rpc();
+        assert.fail("expected settle of unmatched market to fail");
+      } catch {
+        /* expected */
+      }
+    });
+
+    it("double settle: the second attempt dies cleanly, no double payout", async () => {
+      const { market, escrow } = await createSemiMarket();
+      const creatorBefore = await tokenBalance(creatorAta);
+      await settleIx(market, escrow, buildPayload(finalProof)).rpc();
+      try {
+        await settleIx(market, escrow, buildPayload(finalProof)).rpc();
+        assert.fail("expected second settle to fail");
+      } catch {
+        /* market account is closed — clean failure */
+      }
+      // Exactly one payout happened.
+      expect(await tokenBalance(creatorAta)).to.equal(
+        creatorBefore + BigInt(STAKE.muln(2).toString())
+      );
     });
   });
 });
