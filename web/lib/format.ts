@@ -20,13 +20,18 @@ export function fmtSol(lamports: number): string {
 }
 
 export function fmtKickoff(ms: number): string {
-  return new Date(ms).toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    timeZoneName: "short",
-  });
+  // Pinned locale + UTC: match times are conventionally quoted in UTC, and a
+  // system-locale/timezone format renders differently on the server than in
+  // the visitor's browser — a guaranteed hydration mismatch.
+  return (
+    new Date(ms).toLocaleString("en-GB", {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZone: "UTC",
+    }) + " UTC"
+  );
 }
 
 export function strategyHex(bytes: ArrayLike<number>): string {

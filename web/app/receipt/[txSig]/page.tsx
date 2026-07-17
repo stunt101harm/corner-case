@@ -28,13 +28,17 @@ export default function ReceiptPage(): React.ReactNode {
   const program = useProgram();
   const { fixtures } = useFixtures();
 
-  const [receipt, setReceipt] = useState<DecodedReceipt | null>(() => loadReceipt(txSig));
+  // Starts null on BOTH server and client so hydration matches; the cached
+  // copy is applied in the effect below (localStorage is client-only).
+  const [receipt, setReceipt] = useState<DecodedReceipt | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     // Cache-first, then refresh from chain: a cached receipt renders even
     // with the RPC down; a fresh decode fixes any stale cache.
+    const cached = loadReceipt(txSig);
+    if (cached) setReceipt(cached);
     void (async () => {
       try {
         const decoded = await decodeSettleTx(connection, program, txSig);
