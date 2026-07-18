@@ -5,10 +5,28 @@ import "./globals.css";
 import { Providers } from "./providers";
 import { Header } from "@/components/Header";
 
+const TITLE = "Corner Case — provable prop bets";
+const DESCRIPTION =
+  "Trustless P2P prop bets on World Cup stats, settled by TxLINE Merkle proofs on Solana devnet.";
+
 export const metadata: Metadata = {
-  title: "Corner Case — provable prop bets",
-  description:
-    "Trustless P2P prop bets on World Cup stats, settled by TxLINE Merkle proofs on Solana devnet.",
+  metadataBase: new URL("https://corner-case.pages.dev"),
+  title: TITLE,
+  description: DESCRIPTION,
+  openGraph: {
+    title: TITLE,
+    description: "Prop bets settled by Merkle proofs — no oracle wallet, no bookie, no admin key.",
+    url: "/",
+    siteName: "Corner Case",
+    type: "website",
+    images: [{ url: "/og.png", width: 1200, height: 630, alt: "Corner Case — prop bets settled by Merkle proofs" }],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: TITLE,
+    description: "Prop bets settled by Merkle proofs — no oracle wallet, no bookie, no admin key.",
+    images: ["/og.png"],
+  },
 };
 
 export default function RootLayout({ children }: { children: ReactNode }): ReactNode {

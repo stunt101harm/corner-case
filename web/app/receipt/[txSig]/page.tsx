@@ -99,42 +99,89 @@ export default function ReceiptPage(): React.ReactNode {
         <h1 className="text-xl font-bold text-chalk">Settlement receipt</h1>
       </div>
 
-      {/* Outcome banner */}
+      {/* Outcome banner, styled as a soccer bet slip: punched-hole rail on the
+          left, rubber-stamp verdict, dashed tear-off stub with the exact
+          strategy bytes that settled. All the original facts + links remain. */}
       <div
-        className={`card border-2 ${yesWon ? "border-turf-500/70" : "border-card-red/60"} bg-gradient-to-r from-pitch-800 to-pitch-900 p-6`}
+        className={`relative overflow-hidden rounded-xl border-2 ${yesWon ? "border-turf-500/70" : "border-card-red/60"} bg-gradient-to-r from-pitch-800 to-pitch-900`}
       >
-        <p className="label">
-          {home} v {away} · fixture {receipt.event.fixtureId}
-        </p>
-        <h2 className="mt-1 text-2xl font-bold text-chalk">
-          PROVEN <span className={yesWon ? "text-turf-400" : "text-card-red"}>{yesWon ? "TRUE" : "FALSE"}</span>
-          {prop && (
-            <span className="ml-2 font-mono text-lg font-normal text-chalk/80">{prop.description}</span>
-          )}
-        </h2>
-        <p className="mt-2 text-sm text-chalk/80">
-          {yesWon ? "YES" : "NO"} side wins{" "}
-          <span className="font-mono font-bold text-turf-300">
-            {fmtUsdc(receipt.event.payout)} USDC-dev
-          </span>{" "}
-          → {shortAddr(receipt.event.winner, 6)}
-        </p>
-        <p className="mt-1 font-mono text-xs text-chalk/50">
-          final stats: {provenStats.map((s) => `${statKeyName(s.key, home, away)} = ${s.value}`).join(" · ")}
-        </p>
-        <div className="mt-3 flex flex-wrap items-center gap-3 text-xs">
-          <a href={explorerTx(txSig)} target="_blank" rel="noreferrer" className="text-turf-400 underline underline-offset-2 hover:text-turf-300">
-            settlement transaction ↗
-          </a>
-          <span
-            className={`rounded-full border px-2.5 py-0.5 font-semibold uppercase tracking-wider ${
-              receipt.txlineCpiPresent ? "border-turf-500/60 text-turf-300" : "border-chalk/30 text-chalk/50"
-            }`}
-          >
-            {receipt.txlineCpiPresent
-              ? "✓ TxLINE validateStatV2 ran on-chain in this tx"
-              : "TxLINE CPI not visible (inner instructions unavailable)"}
-          </span>
+        <div className="ticket-holes absolute inset-y-2 left-2 w-3" aria-hidden />
+        <div className="absolute inset-y-0 left-7 border-l border-dashed border-chalk/15" aria-hidden />
+
+        <div className="py-5 pl-12 pr-6">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="min-w-0">
+              <p className="label">
+                Official settlement slip · fixture {receipt.event.fixtureId}
+              </p>
+              <h2 className="mt-1 text-2xl font-bold text-chalk">
+                {home} v {away}
+              </h2>
+              <p className="mt-1.5 font-mono text-base text-chalk/85">
+                {prop ? prop.description : "settled on the Merkle-proven final stats below"}
+              </p>
+            </div>
+            <span
+              className={`stamp shrink-0 text-xl ${yesWon ? "text-turf-400" : "text-card-red"}`}
+              role="img"
+              aria-label={`Proven ${yesWon ? "true" : "false"}`}
+            >
+              Proven
+              <br />
+              {yesWon ? "True" : "False"}
+            </span>
+          </div>
+
+          <div className="mt-4 grid gap-3 sm:grid-cols-3">
+            {prop && (
+              <div>
+                <p className="label">Stake / side</p>
+                <p className="mt-0.5 font-mono text-sm font-bold text-chalk/90">
+                  {fmtUsdc(prop.stake)} USDC-dev
+                </p>
+              </div>
+            )}
+            <div>
+              <p className="label">{yesWon ? "YES" : "NO"} side wins</p>
+              <p className="mt-0.5 font-mono text-sm font-bold text-turf-300">
+                {fmtUsdc(receipt.event.payout)} USDC-dev
+              </p>
+            </div>
+            <div>
+              <p className="label">Paid to</p>
+              <p className="mt-0.5 font-mono text-sm font-bold text-chalk/90">
+                {shortAddr(receipt.event.winner, 6)}
+              </p>
+            </div>
+          </div>
+
+          <p className="mt-3 font-mono text-xs text-chalk/50">
+            final stats: {provenStats.map((s) => `${statKeyName(s.key, home, away)} = ${s.value}`).join(" · ")}
+          </p>
+          <div className="mt-3 flex flex-wrap items-center gap-3 text-xs">
+            <a href={explorerTx(txSig)} target="_blank" rel="noreferrer" className="text-turf-400 underline underline-offset-2 hover:text-turf-300">
+              settlement transaction ↗
+            </a>
+            <span
+              className={`rounded-full border px-2.5 py-0.5 font-semibold uppercase tracking-wider ${
+                receipt.txlineCpiPresent ? "border-turf-500/60 text-turf-300" : "border-chalk/30 text-chalk/50"
+              }`}
+            >
+              {receipt.txlineCpiPresent
+                ? "✓ TxLINE validateStatV2 ran on-chain in this tx"
+                : "TxLINE CPI not visible (inner instructions unavailable)"}
+            </span>
+          </div>
+        </div>
+
+        {/* Tear-off stub: the exact bytes that decided this slip. */}
+        <div className="tear-line py-3 pl-12 pr-6">
+          <p className="label">
+            {prop ? "Strategy (borsh, as stored on-chain)" : "Proven stat keys"}
+          </p>
+          <p className="mono-hex mt-1">
+            {prop ? prop.strategyHex : `[${provenStats.map((s) => s.key).join(", ")}]`}
+          </p>
         </div>
       </div>
 

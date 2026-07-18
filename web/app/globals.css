@@ -53,4 +53,102 @@ body {
   .mono-hex {
     @apply break-all font-mono text-[11px] leading-relaxed text-chalk/70;
   }
+  /* Text/select input, same recipe as the builder's stake field. */
+  .input-field {
+    @apply h-10 w-full rounded-lg border border-pitch-500 bg-pitch-900 px-3 font-mono text-sm text-chalk outline-none focus:border-turf-500;
+  }
+}
+
+/* --- Bet-slip ticket (receipt hero) ----------------------------------- */
+
+/* Vertical rail of punched feed holes down the ticket's left edge. The dot
+   color matches the page background so the holes read as cut-outs. */
+.ticket-holes {
+  background-image: radial-gradient(circle, #04100a 2.6px, rgba(0, 0, 0, 0) 3.2px);
+  background-size: 10px 16px;
+  background-position: 50% 8px;
+  background-repeat: repeat-y;
+}
+
+/* Dashed tear-off line above the strategy-hex stub. */
+.tear-line {
+  border-top: 2px dashed rgba(233, 245, 236, 0.16);
+}
+
+/* Rubber-stamp verdict mark: rotated, double-ring border, slightly faded. */
+.stamp {
+  display: inline-block;
+  transform: rotate(-6deg);
+  border: 4px double currentColor;
+  border-radius: 10px;
+  padding: 0.25rem 0.8rem;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  line-height: 1.15;
+  opacity: 0.92;
+  box-shadow: inset 0 0 14px rgba(0, 0, 0, 0.35);
+  animation: stamp-in 500ms cubic-bezier(0.2, 1.4, 0.4, 1) both;
+}
+@keyframes stamp-in {
+  0% {
+    transform: scale(0.7) rotate(-6deg);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.1) rotate(-6deg);
+  }
+  100% {
+    transform: scale(1) rotate(-6deg);
+    opacity: 0.92;
+  }
+}
+
+/* --- Live ticker choreography ----------------------------------------- */
+
+/* Goal rows flash bright then settle on a persistent soft highlight. */
+.goal-row {
+  animation: goal-flash 900ms ease-out both;
+  border-radius: 0.5rem;
+}
+@keyframes goal-flash {
+  0% {
+    background-color: rgba(46, 224, 124, 0.35);
+  }
+  100% {
+    background-color: rgba(46, 224, 124, 0.1);
+  }
+}
+
+/* Scoreboard number pops when a goal lands. */
+.score-pop {
+  display: inline-block;
+  animation: score-pop 700ms ease-out;
+}
+@keyframes score-pop {
+  0% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(1.3);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* Condition-tracker badge / value celebration. */
+.badge-pop {
+  animation: badge-pop 500ms cubic-bezier(0.2, 1.4, 0.4, 1);
+}
+@keyframes badge-pop {
+  0% {
+    transform: scale(0.7);
+  }
+  55% {
+    transform: scale(1.15);
+  }
+  100% {
+    transform: scale(1);
+  }
 }

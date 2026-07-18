@@ -30,6 +30,7 @@ const NAV = [
   { href: "/new", label: "Create" },
   { href: "/demo", label: "Demo" },
   { href: "/gates", label: "Break in" },
+  { href: "/verify", label: "Inspector" },
 ] as const;
 
 export function Header(): React.ReactNode {
@@ -57,8 +58,15 @@ export function Header(): React.ReactNode {
     }
   };
 
+  // NOTE: deliberately NO backdrop-blur and NO translucent background here.
+  // sticky + backdrop-filter (and even sticky + translucent bg) hits a
+  // Chromium compositing bug: the header gets rasterized into the scrolling
+  // contents layer, so under scroll it paints mid-page over a black
+  // unrasterized band, and stale content smears through the translucent
+  // parts. Fully opaque bg + will-change:transform promotes the header onto
+  // its own compositor layer, which pins it to the viewport top always.
   return (
-    <header className="sticky top-0 z-40 border-b border-pitch-700/60 bg-pitch-950/90 backdrop-blur">
+    <header className="sticky top-0 z-40 border-b border-pitch-700/60 bg-pitch-950 will-change-transform">
       <div className="mx-auto flex h-14 w-full max-w-6xl items-center gap-4 px-4">
         <Link href="/" className="flex items-center gap-2">
           <CornerFlag />

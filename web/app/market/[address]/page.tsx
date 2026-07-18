@@ -30,10 +30,13 @@ import {
 } from "@/lib/program";
 import { useFixtures, useProgram, useSettlements } from "@/lib/hooks";
 import { marketView, type MarketView } from "@/lib/marketView";
+import { fixtureDisplay } from "@/lib/fixtures";
 import { findFinalisedSeq, getProof, getSnapshot } from "@/lib/relay";
-import { savePropContext } from "@/lib/receiptCache";
+import { loadPropContext, savePropContext } from "@/lib/receiptCache";
+import { statKeyName } from "@/lib/strategy";
 import { humanizeError } from "@/lib/errors";
 import { fmtKickoff, fmtUsdc, shortAddr } from "@/lib/format";
+import type { SettlementEntry, StatLeafJson } from "@/lib/types";
 import { DEMO_FIXTURE_ID, epochDayFromMs, explorerAddress, explorerTx } from "@/lib/constants";
 import { LiveMatch, type TrackerSpec } from "@/components/LiveMatch";
 import { StateBadge, FixtureBadge } from "@/components/StateBadge";
@@ -144,21 +147,11 @@ function MarketDetail({ marketPk }: { marketPk: PublicKey }): React.ReactNode {
   }
 
   if (!account) {
-    // Account closed (settled/cancelled/voided) or never existed.
+    // Account closed (settled/cancelled/voided) or never existed. If the
+    // settlement journal knows it, show the receipt's headline right here —
+    // a settled market is the product's wow moment, not a dead end.
     if (journalEntry) {
-      return (
-        <div className="mx-auto max-w-xl space-y-4 py-10 text-center">
-          <p className="text-3xl">🏁</p>
-          <h1 className="text-xl font-bold text-chalk">This market has settled</h1>
-          <p className="text-sm text-chalk/60">
-            {fmtUsdc(journalEntry.payout)} USDC-dev paid to {shortAddr(journalEntry.winner)}; the
-            on-chain account was closed with settlement.
-          </p>
-          <Link href={`/receipt/${journalEntry.txSig}`} className="btn-primary">
-            View the proof receipt →
-          </Link>
-        </div>
-      );
+      return <SettledSummary entry={journalEntry} />;
     }
     return (
       <div className="py-16 text-center text-sm text-chalk/60">
@@ -394,6 +387,119 @@ function MarketDetail({ marketPk }: { marketPk: PublicKey }): React.ReactNode {
           />
         </section>
       )}
+    </div>
+  );
+}
+
+/**
+ * Inline receipt summary for a market whose on-chain account is closed but
+ * whose settlement lives in the journal: outcome banner, winner + payout,
+ * final proven stats (fetched from the relay's proof endpoint), and a
+ * prominent link to the full proof receipt.
+ */
+function SettledSummary({ entry }: { entry: SettlementEntry }): React.ReactNode {
+  const { fixtures } = useFixtures();
+  const [finalStats, setFinalStats] = useState<StatLeafJson[] | null>(null);
+
+  // The prop context survives account closure in localStorage (saved while
+  // the market was open); absent for visitors who never saw it open.
+  const prop = useMemo(() => loadPropContext(entry.market), [entry.market]);
+
+  const f = fixtureDisplay(entry.fixtureId, fixtures);
+  const home = prop?.home ?? f.home;
+  const away = prop?.away ?? f.away;
+  const statKeys = entry.statKeys ?? prop?.statKeys;
+  const seq = entry.finalisedSeq;
+
+  // Best-effort: re-fetch the proven final stats from the relay. Purely
+  // additive — the summary renders fine without them.
+  useEffect(() => {
+    if (!statKeys || statKeys.length === 0 || seq === undefined) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const proof = await getProof(entry.fixtureId, seq, statKeys);
+        if (!cancelled) setFinalStats(proof.statsToProve);
+      } catch {
+        /* relay hiccup — just omit the stats line */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [entry.fixtureId, seq, statKeys]);
+
+  const known = entry.predicateTrue !== undefined;
+  const yesWon = entry.predicateTrue === true;
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-center gap-3">
+        <Link href="/" className="text-sm text-chalk/50 hover:text-chalk">
+          ← Markets
+        </Link>
+        <h1 className="text-xl font-bold text-chalk">
+          {prop?.templateTitle ?? "This market has settled"}
+        </h1>
+        <span className="rounded-full border border-turf-500/60 px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wider text-turf-300">
+          Settled
+        </span>
+      </div>
+
+      <div
+        className={`card border-2 ${!known || yesWon ? "border-turf-500/70" : "border-card-red/60"} bg-gradient-to-r from-pitch-800 to-pitch-900 p-6`}
+      >
+        <p className="label">
+          {home} v {away} · fixture {entry.fixtureId}
+        </p>
+        <h2 className="mt-1 text-2xl font-bold text-chalk">
+          {known ? (
+            <>
+              PROVEN{" "}
+              <span className={yesWon ? "text-turf-400" : "text-card-red"}>
+                {yesWon ? "TRUE" : "FALSE"}
+              </span>
+            </>
+          ) : (
+            <>SETTLED ON-CHAIN</>
+          )}
+          {prop && (
+            <span className="ml-2 font-mono text-lg font-normal text-chalk/80">
+              {prop.description}
+            </span>
+          )}
+        </h2>
+        <p className="mt-2 text-sm text-chalk/80">
+          {known ? `${yesWon ? "YES" : "NO"} side wins ` : "Winner takes "}
+          <span className="font-mono font-bold text-turf-300">
+            {fmtUsdc(entry.payout)} USDC-dev
+          </span>{" "}
+          → <span className="font-mono">{shortAddr(entry.winner, 6)}</span>
+        </p>
+        {finalStats && (
+          <p className="mt-1 font-mono text-xs text-chalk/50">
+            final stats:{" "}
+            {finalStats.map((s) => `${statKeyName(s.key, home, away)} = ${s.value}`).join(" · ")}
+          </p>
+        )}
+        <p className="mt-1 text-xs text-chalk/50">
+          Settled by a TxLINE Merkle proof on epoch day {entry.epochDay}; the on-chain market
+          account closed with settlement.
+        </p>
+        <div className="mt-4 flex flex-wrap items-center gap-3">
+          <Link href={`/receipt/${entry.txSig}`} className="btn-primary">
+            View full receipt — re-verify every hash →
+          </Link>
+          <a
+            href={explorerTx(entry.txSig)}
+            target="_blank"
+            rel="noreferrer"
+            className="text-xs text-turf-400 underline underline-offset-2 hover:text-turf-300"
+          >
+            settlement transaction ↗
+          </a>
+        </div>
+      </div>
     </div>
   );
 }
