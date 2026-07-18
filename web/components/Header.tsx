@@ -29,6 +29,7 @@ const NAV = [
   { href: "/", label: "Markets" },
   { href: "/new", label: "Create" },
   { href: "/demo", label: "Demo" },
+  { href: "/gates", label: "Break in" },
 ] as const;
 
 export function Header(): React.ReactNode {

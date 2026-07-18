@@ -49,6 +49,18 @@ const POLL_SECS = Number(process.env.SETTLE_POLL_SECS ?? 30);
 const GRACE_SECS = Number(process.env.SETTLE_GRACE_SECS ?? 120);
 const RPC_URL = process.env.RPC_URL ?? "https://api.devnet.solana.com";
 
+// Markets this keeper must NEVER settle, even though valid final proofs
+// exist: the /gates page's standing attack targets — their whole purpose is
+// to stay Matched so judges can watch the gates reject bad proofs.
+// Extendable via SETTLE_SKIP=addr1,addr2.
+const SKIP = new Set(
+  [
+    "HzcHywyow31YJNFGvzTApHEphTaNHiFqidXCHdFHxEkD", // gates attack #1 (halftime proof target)
+    "J2YUfmKTbUCsbrkUvdrTp8kaumdQyuJ6E3jcSeCoVEXr", // gates attack #2 (wrong-stats target)
+    ...(process.env.SETTLE_SKIP ?? "").split(",").map((s) => s.trim()),
+  ].filter(Boolean),
+);
+
 const log = (msg: string) => console.log(`${new Date().toISOString()} ${msg}`);
 
 // ---------------------------------------------------------------------------
@@ -217,6 +229,7 @@ async function tick(onlyFixture?: number): Promise<void> {
     (m) =>
       "matched" in m.account.state &&
       !done.has(m.publicKey.toBase58()) &&
+      !SKIP.has(m.publicKey.toBase58()) &&
       (onlyFixture === undefined || Number(m.account.fixtureId.toString()) === onlyFixture),
   );
   if (matched.length === 0) return;
