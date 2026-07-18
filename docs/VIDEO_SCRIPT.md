@@ -60,12 +60,17 @@ Screen: receipt page of that settlement.
   ran on-chain in this tx" → click the explorer link, point at the inner
   CPI to TxLINE's program (pre-scrolled tab).
 - Back to receipt → click **Re-verify in this browser**. Let the hash chain
-  animate to completion.
+  animate to completion; land on the green "= the bytes TxLINE posted
+  on-chain" line at the bottom.
 > "Every settlement produces a receipt. This isn't a screenshot of an API —
-> your browser just recomputed fourteen sha256 hashes from the raw stat
-> leaves up TxLINE's Merkle tree, and every node matches. The final link —
-> the daily root — was verified on-chain by TxLINE's own program inside the
-> settlement transaction. Trust nobody, verify everything."
+> your browser just recomputed the ENTIRE Merkle chain: stat leaves, the
+> fixture summary, all the way down to the exact 32 bytes at this match's
+> slot of TxLINE's on-chain root account. Every hash matches. We had to
+> reverse-engineer three undocumented layers to do this — the leaf domain
+> tag, the account format, and a non-membership presence bitmap that proves
+> a stat was ZERO. That bitmap also decodes the match's whole stat
+> fingerprint from 32 bytes" — [show the 8×8 fingerprint grid]. "Trust
+> nobody. Verify everything."
 
 ## 3:50–4:20 — Adversarial beat: the /gates page ("Break in")
 
