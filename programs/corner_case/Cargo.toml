@@ -22,5 +22,8 @@ idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
 localtest = []
 
 [dependencies]
-anchor-lang = "0.31.1"
+# init-if-needed: settle/void recreate a party's closed USDC-dev ATA instead
+# of stranding funds — a loser closing their token account must not be able
+# to ransom the winner's payout (or brick the void escape hatch).
+anchor-lang = { version = "0.31.1", features = ["init-if-needed"] }
 anchor-spl = "0.31.1"

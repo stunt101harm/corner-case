@@ -1,5 +1,7 @@
-// Corner Case — on-chain scaffold tests (issue #4 scope: everything except
-// the settlement path, which is a deliberate stub).
+// Corner Case — full on-chain test suite: escrow lifecycle, all five check
+// gates exercised adversarially, and the COMPLETE settlement path run against
+// TxLINE's real program + real Merkle proofs (see the settle_market describe
+// block and Anchor.toml [test.validator] clones).
 //
 // Runs against a local validator with the program built under the `localtest`
 // feature: the pinned mint is the committed throwaway keypair at
@@ -15,6 +17,8 @@ import {
   getAssociatedTokenAddressSync,
   getAccount,
   mintTo,
+  transferChecked,
+  closeAccount,
   TOKEN_PROGRAM_ID,
   ASSOCIATED_TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
@@ -432,6 +436,7 @@ describe("corner_case", () => {
       return program.methods
         .voidMarket()
         .accounts({
+          caller: creator.publicKey, // any fee payer; provider wallet here
           market,
           creator: creator.publicKey,
           taker: taker.publicKey,
@@ -440,6 +445,8 @@ describe("corner_case", () => {
           takerAta,
           escrow,
           tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: anchor.web3.SystemProgram.programId,
         } as any);
     }
 
@@ -663,6 +670,7 @@ describe("corner_case", () => {
           txlineProgram: TXORACLE_ID,
           tokenProgram: TOKEN_PROGRAM_ID,
           associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: anchor.web3.SystemProgram.programId,
         } as any)
         .preInstructions([
           anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({
@@ -813,6 +821,128 @@ describe("corner_case", () => {
       expect(await tokenBalance(creatorAta)).to.equal(
         creatorBefore + BigInt(STAKE.muln(2).toString())
       );
+    });
+
+    it("gate #3 positive path: epoch_day = stored + 1 settles (post-midnight finals)", async () => {
+      // Market created with the PREVIOUS day's estimate; the proof lives
+      // under 20649's root — exactly the evening-kickoff-finalises-after-
+      // midnight case the +1 tolerance exists for.
+      const { market, escrow } = await createSemiMarket({
+        epochDay: SEMI_EPOCH_DAY - 1,
+      });
+      await settleIx(market, escrow, buildPayload(finalProof)).rpc();
+      await assertClosed(market, "market");
+    });
+
+    it("forged destination: outsider's ATA as creator_ata is a constraint violation", async () => {
+      const { market, escrow } = await createSemiMarket();
+      const outsiderBefore = await tokenBalance(outsiderAta);
+      try {
+        await program.methods
+          .settleMarket(SEMI_EPOCH_DAY, buildPayload(finalProof))
+          .accounts({
+            caller: outsider.publicKey,
+            market,
+            creator: creator.publicKey,
+            taker: taker.publicKey,
+            mint,
+            creatorAta: outsiderAta, // the forgery — not creator's derived ATA
+            takerAta,
+            escrow,
+            txlineRoots: rootsPdaFor(SEMI_EPOCH_DAY),
+            txlineProgram: TXORACLE_ID,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+            systemProgram: anchor.web3.SystemProgram.programId,
+          } as any)
+          .preInstructions([
+            anchor.web3.ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+          ])
+          .signers([outsider])
+          .rpc();
+        assert.fail("expected the forged destination to fail");
+      } catch {
+        /* associated-token derivation constraint rejects it */
+      }
+      expect(await tokenBalance(outsiderAta)).to.equal(outsiderBefore);
+      // The honest settle still works afterwards.
+      await settleIx(market, escrow, buildPayload(finalProof)).rpc();
+      await assertClosed(market, "market");
+    });
+
+    it("closed-ATA ransom defused: settle recreates the winner's ATA and pays", async () => {
+      // Taker wins (home-wins predicate is FALSE for 1-2) but has closed
+      // their token account — pre-fix this bricked settlement forever.
+      const { market, escrow } = await createSemiMarket({
+        strategy: STRAT_HOME_WINS,
+      });
+      const drained = await tokenBalance(takerAta);
+      await transferChecked(
+        connection, taker, takerAta, mint, outsiderAta, taker, drained, DECIMALS
+      );
+      await closeAccount(connection, taker, takerAta, taker.publicKey, taker);
+      expect(await connection.getAccountInfo(takerAta)).to.equal(null);
+
+      await settleIx(market, escrow, buildPayload(finalProof)).rpc();
+
+      // Recreated at the same derived address, payout delivered.
+      expect(await tokenBalance(takerAta)).to.equal(
+        BigInt(STAKE.muln(2).toString())
+      );
+      await assertClosed(market, "market");
+
+      // Restore taker liquidity for any later tests.
+      await mintTo(connection, payer, mint, takerAta, payer, 1_000_000_000);
+    });
+
+    it("closed-ATA ransom defused: void recreates the refund ATA and unwinds", async () => {
+      const nonce = nextNonce();
+      const kickoffTs = new BN((await chainNow()) + 2);
+      const market = marketPda(creator.publicKey, nonce);
+      const escrow = escrowAta(market);
+      await program.methods
+        .createMarket(nonce, SEMI_FIXTURE, SEMI_EPOCH_DAY, kickoffTs, true, STAKE, STRAT_AWAY_WINS, [1, 2])
+        .accounts({
+          creator: creator.publicKey,
+          market,
+          mint,
+          creatorAta,
+          escrow,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        } as any)
+        .rpc();
+      await acceptMarket(market, escrow, taker, takerAta);
+
+      const drained = await tokenBalance(takerAta);
+      await transferChecked(
+        connection, taker, takerAta, mint, outsiderAta, taker, drained, DECIMALS
+      );
+      await closeAccount(connection, taker, takerAta, taker.publicKey, taker);
+
+      await waitUntilChainTime(kickoffTs.toNumber() + VOID_DELAY_SECS);
+      await program.methods
+        .voidMarket()
+        .accounts({
+          caller: outsider.publicKey, // a stranger unbricks it, permissionlessly
+          market,
+          creator: creator.publicKey,
+          taker: taker.publicKey,
+          mint,
+          creatorAta,
+          takerAta,
+          escrow,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: anchor.web3.SystemProgram.programId,
+        } as any)
+        .signers([outsider])
+        .rpc();
+
+      expect(await tokenBalance(takerAta)).to.equal(BigInt(STAKE.toString()));
+      await assertClosed(market, "market");
+      await mintTo(connection, payer, mint, takerAta, payer, 1_000_000_000);
     });
   });
 });

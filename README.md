@@ -73,7 +73,7 @@ Settlement reads TxLINE's verdict from **CPI return data with a program-id check
 
 ## Deterministic tests with real proofs
 
-`anchor test -- --features localtest` — **26 tests** run the *full production settlement path* locally: the validator clones TxLINE's program + the real epoch-20649 roots account from devnet, and the suite replays committed real Merkle proofs from England v Argentina ([fixtures/](fixtures)). Both payout directions, all five gates exercised adversarially, corrupted proofs, double-settles, mismatched roots. No mocks anywhere.
+`anchor test -- --features localtest` — **30 tests** run the *full production settlement path* locally: the validator clones TxLINE's program + the real epoch-20649 roots account from devnet, and the suite replays committed real Merkle proofs from England v Argentina ([fixtures/](fixtures)). Both payout directions, every gate exercised in both directions, corrupted proofs, double-settles, mismatched roots, forged destination accounts, and the closed-ATA ransom vector (defused with `init_if_needed`). No mocks anywhere.
 
 ## TxLINE surface used
 
@@ -83,7 +83,7 @@ Settlement reads TxLINE's verdict from **CPI return data with a program-id check
 
 ```
 programs/corner_case/   Anchor program (5 instructions, 5 gates, txoracle CPI interface)
-tests/                  26-test suite against cloned TxLINE accounts + real proofs
+tests/                  30-test suite against cloned TxLINE accounts + real proofs
 keeper/                 auth · recorder · replay · settle-watch · local relay
 worker/                 Cloudflare Worker relay (judge-facing API + faucet)
 web/                    Next.js app (markets · builder · live ticker · receipts · demo)

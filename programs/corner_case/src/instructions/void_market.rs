@@ -2,16 +2,26 @@
 //!
 //! If a matched market is still unsettled VOID_DELAY_SECS after kickoff
 //! (dead keeper, TxLINE outage, unprovable stat), *anyone* can unwind it:
-//! both stakes go back to their owners' canonical ATAs. Deliberately
-//! signerless — the safety valve must not depend on either party's key.
+//! both stakes go back to their owners' canonical ATAs. The only signer is
+//! the fee payer (any wallet) — the safety valve must not depend on either
+//! party's key, and the caller fronts rent if a refund ATA was closed.
 
 use anchor_lang::prelude::*;
-use anchor_spl::token::{self, CloseAccount, Mint, Token, TokenAccount, TransferChecked};
+use anchor_spl::{
+    associated_token::AssociatedToken,
+    token::{self, CloseAccount, Mint, Token, TokenAccount, TransferChecked},
+};
 
 use crate::{constants::*, errors::CornerCaseError, state::*};
 
 #[derive(Accounts)]
 pub struct VoidMarket<'info> {
+    /// Any fee payer; also fronts rent to recreate a closed refund ATA
+    /// (init_if_needed below) so neither party can brick the escape hatch
+    /// by closing their token account.
+    #[account(mut)]
+    pub caller: Signer<'info>,
+
     #[account(
         mut,
         close = creator, // Market rent back to the creator who paid it.
@@ -37,16 +47,19 @@ pub struct VoidMarket<'info> {
     pub mint: Account<'info, Mint>,
 
     /// Refund destinations are both *derived* ATAs of the stored parties —
-    /// the caller (who can be anyone) picks nothing.
+    /// the caller (who can be anyone) picks nothing. Recreated on the spot
+    /// if a party closed theirs (funds must never strand).
     #[account(
-        mut,
+        init_if_needed,
+        payer = caller,
         associated_token::mint = mint,
         associated_token::authority = creator,
     )]
     pub creator_ata: Account<'info, TokenAccount>,
 
     #[account(
-        mut,
+        init_if_needed,
+        payer = caller,
         associated_token::mint = mint,
         associated_token::authority = taker,
     )]
@@ -60,6 +73,8 @@ pub struct VoidMarket<'info> {
     pub escrow: Account<'info, TokenAccount>,
 
     pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub system_program: Program<'info, System>,
 }
 
 pub fn void_market_handler(ctx: Context<VoidMarket>) -> Result<()> {

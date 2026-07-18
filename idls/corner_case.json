@@ -887,7 +887,10 @@
           "docs": [
             "Creator's canonical ATA — one of exactly two possible payout",
             "destinations. Both are derivation-constrained; the caller cannot",
-            "substitute a free-form winner account."
+            "substitute a free-form winner account. `init_if_needed`: a party who",
+            "closed their token account must not be able to block settlement (a",
+            "ransom vector against the winner) — the caller fronts the ~0.002 SOL",
+            "rent to recreate it at the same derived address."
           ],
           "writable": true,
           "pda": {
@@ -1184,6 +1187,10 @@
         {
           "name": "associated_token_program",
           "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
         }
       ],
       "args": [
@@ -1218,6 +1225,16 @@
         69
       ],
       "accounts": [
+        {
+          "name": "caller",
+          "docs": [
+            "Any fee payer; also fronts rent to recreate a closed refund ATA",
+            "(init_if_needed below) so neither party can brick the escape hatch",
+            "by closing their token account."
+          ],
+          "writable": true,
+          "signer": true
+        },
         {
           "name": "market",
           "writable": true,
@@ -1274,7 +1291,8 @@
           "name": "creator_ata",
           "docs": [
             "Refund destinations are both *derived* ATAs of the stored parties —",
-            "the caller (who can be anyone) picks nothing."
+            "the caller (who can be anyone) picks nothing. Recreated on the spot",
+            "if a party closed theirs (funds must never strand)."
           ],
           "writable": true,
           "pda": {
@@ -1547,6 +1565,14 @@
         {
           "name": "token_program",
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
         }
       ],
       "args": []
@@ -1675,6 +1701,11 @@
     },
     {
       "code": 6018,
+      "name": "InvalidTxlineProgram",
+      "msg": "txline_program must be the pinned TxLINE program id"
+    },
+    {
+      "code": 6019,
       "name": "NoValidationResult",
       "msg": "TxLINE validation returned no readable verdict"
     }

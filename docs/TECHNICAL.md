@@ -1,7 +1,7 @@
 # Corner Case — Technical Documentation
 
 *The brief technical overview required by the submission, plus enough depth to
-audit our claims. Everything here is verified — by the 26-test suite, by
+audit our claims. Everything here is verified — by the 30-test suite, by
 devnet transactions you can open, or by the spike notes with raw data.*
 
 ## Core idea
@@ -77,7 +77,7 @@ never strand on a dead keeper or a TxLINE outage.
 The test validator clones TxLINE's devnet program + the epoch-20649 roots
 account (Anchor.toml `[test.validator]`), so `anchor test` runs the identical
 byte-for-byte settlement path against committed real proofs — deterministic,
-offline-reproducible, no mocks. 26 tests: escrow lifecycle, both payout
+offline-reproducible, no mocks. 30 tests: escrow lifecycle, both payout
 directions, each gate attacked individually, corrupted proof (inner TxLINE
 error propagates, then the honest proof still settles), double-settle race,
 forged destination accounts, permissionless outsider callers.
@@ -92,6 +92,13 @@ the web client (`5WyXinoy…`).
   scope: a bulletproof deterministic core over a half-working AMM.
 - The UI's 5 templates cover goals/corners/cards props; the program itself
   accepts any ≤512-byte strategy over ≤5 pinned keys.
+- `kickoff_ts` is creator-supplied and only checked to be in the future —
+  the chain cannot know the real schedule. Gate #1's fairness therefore
+  trusts the creator's timestamp; the frontend cross-checks it against
+  TxLINE's fixture `StartTime` and refuses to display deviant markets as
+  normal. A taker should treat a market whose kickoff disagrees with the
+  fixture list as suspect. (Also disclosed here because "nothing is
+  trusted" deserves its one asterisk.)
 - Keeper grace window (post-final correction absorption) defaults to 120s;
   no correction was observed in recorded matches, and gate #2 + single-shot
   settlement bound the exposure either way.

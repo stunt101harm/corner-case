@@ -70,9 +70,13 @@ pub struct SettleMarket<'info> {
 
     /// Creator's canonical ATA — one of exactly two possible payout
     /// destinations. Both are derivation-constrained; the caller cannot
-    /// substitute a free-form winner account.
+    /// substitute a free-form winner account. `init_if_needed`: a party who
+    /// closed their token account must not be able to block settlement (a
+    /// ransom vector against the winner) — the caller fronts the ~0.002 SOL
+    /// rent to recreate it at the same derived address.
     #[account(
-        mut,
+        init_if_needed,
+        payer = caller,
         associated_token::mint = mint,
         associated_token::authority = creator,
     )]
@@ -80,7 +84,8 @@ pub struct SettleMarket<'info> {
 
     /// Taker's canonical ATA — the other possible payout destination.
     #[account(
-        mut,
+        init_if_needed,
+        payer = caller,
         associated_token::mint = mint,
         associated_token::authority = taker,
     )]
@@ -103,11 +108,12 @@ pub struct SettleMarket<'info> {
 
     /// CHECK: pinned to TxLINE's program id; the runtime enforces that the
     /// CPI target is executable.
-    #[account(address = txoracle::TXORACLE_ID @ CornerCaseError::InvalidRootsAccount)]
+    #[account(address = txoracle::TXORACLE_ID @ CornerCaseError::InvalidTxlineProgram)]
     pub txline_program: UncheckedAccount<'info>,
 
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
+    pub system_program: Program<'info, System>,
 }
 
 /// Emitted on settlement so the frontend receipt can reconstruct the outcome

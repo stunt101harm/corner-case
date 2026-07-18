@@ -61,6 +61,9 @@ pub enum CornerCaseError {
     #[msg("TxLINE roots account or program does not match the expected derivation")]
     InvalidRootsAccount,
 
+    #[msg("txline_program must be the pinned TxLINE program id")]
+    InvalidTxlineProgram,
+
     #[msg("TxLINE validation returned no readable verdict")]
     NoValidationResult,
 }

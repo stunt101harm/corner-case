@@ -40,7 +40,19 @@ export function MarketCard({
 
   const isCreator = wallet.publicKey?.toBase58() === view.creator;
   const kickoffPassed = Date.now() / 1000 > view.kickoffTs;
-  const acceptable = view.stateName === "Open" && !kickoffPassed;
+
+  // The on-chain kickoff_ts is creator-supplied (the chain can't know the
+  // real schedule) — cross-check it against TxLINE's fixture StartTime and
+  // treat markets that disagree by >30 min as suspect: a late kickoff_ts
+  // could lure a taker into accepting mid-match against a half-known
+  // outcome. Finished fixtures are exempt (demo markets use synthetic
+  // kickoffs by design; gate #1 is irrelevant once results are final data).
+  const kickoffSuspect =
+    view.fixture.status !== "finished" &&
+    view.fixture.kickoffMs > 0 &&
+    Math.abs(view.kickoffTs * 1000 - view.fixture.kickoffMs) > 30 * 60 * 1000;
+
+  const acceptable = view.stateName === "Open" && !kickoffPassed && !kickoffSuspect;
 
   const onAccept = async (): Promise<void> => {
     if (!wallet.publicKey || !wallet.sendTransaction) {
@@ -135,6 +147,14 @@ export function MarketCard({
         )}
         {view.stateName === "Open" && kickoffPassed && (
           <span className="text-xs text-chalk/40">Kickoff passed — accepts closed</span>
+        )}
+        {kickoffSuspect && (
+          <span
+            className="rounded-full border border-amber-400/50 px-2 py-0.5 text-[11px] text-amber-300/90"
+            title="This market's on-chain kickoff time disagrees with TxLINE's fixture schedule by more than 30 minutes. A late kickoff could let a taker be lured mid-match — accepts are disabled here."
+          >
+            ⚠ kickoff differs from TxLINE schedule
+          </span>
         )}
         <Link
           href={`/market/${view.pubkey}`}

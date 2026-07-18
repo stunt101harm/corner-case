@@ -26,3 +26,7 @@ recordings/raw/
 
 # Vendored reference repo (cloned, not ours)
 vendor/
+
+# Web build output
+web/.vercel/
+web/tsconfig.tsbuildinfo
