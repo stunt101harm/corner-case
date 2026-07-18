@@ -23,7 +23,7 @@ Per submission requirements: our team's experience using the TxLINE API — what
 
 ## 2026-07-18 (deployment + receipt work)
 
-- **Discovery (docs gap, genuinely interesting): period-scoped stat keys use an undocumented aggregation-proof scheme.** For base keys (1–8), `statProofs` entries are ordinary sibling hashes — `sha256(borsh(ScoreStat))` folded with `sha256(left‖right)` reproduces `eventStatRoot` exactly (we recompute this in the browser on our receipts). For period-prefixed keys (1001…, 3005…), the entries are *structured parameter nodes* (sentinel `0x01`/`0xff` padding + encoded ranges, 2 nodes vs 5) that only `validateStatV2` knows how to interpret. Nothing in the docs mentions the distinction; client-side verifiers will hit it. It settles on-chain flawlessly — we'd just love the scheme documented.
+- **Discovery (docs gap — later fully reverse-engineered, see the appendix below): zero-value stats use an undocumented NON-MEMBERSHIP proof scheme.** For present (non-zero) stats, `statProofs` entries are ordinary sibling hashes — `sha256(key u32 LE ‖ value i32 LE ‖ period i32 LE)` folded with `sha256(left‖right)` (duplicate-last-odd-node rule) reproduces `eventStatRoot`. For **zero-value** keys the two "proof nodes" are structured: a fixed header and the complement of a presence bitmap. Nothing in the docs mentions the distinction; client-side verifiers will hit it. Full spec appendix at the bottom of this file — we'd love to see it merged into the official docs.
 - **Friction (not TxLINE's fault but relevant to Solana devnet integrations): Cloudflare Workers egress IPs are blocked by `api.devnet.solana.com`** (403 "IP or provider blocked"), so our Worker faucet uses a third-party devnet RPC.
 - **Liked: the whole judge-facing surface (proofs, replays via `/scores/historical`, fixtures) works fine from serverless** — the API is plain HTTPS + tokens, no SDK lock-in.
 
@@ -32,3 +32,40 @@ Per submission requirements: our team's experience using the TxLINE API — what
 - **Docs gap: `/odds/snapshot/{id}` semantics.** `Prices` are decimal odds ×1000 (undocumented — deduced from `Pct`); `Pct` can be the string `"NA"`; `MarketPeriod: null` means full match vs `"half=1"`. More importantly, **the snapshot returns only the LATEST update batch, not a merged book** — successive polls return different (sometimes empty) subsets, so any consumer must maintain a rolling per-fixture book keyed by market type/period/parameters or their UI flickers. Worth a prominent docs callout; it's the odds-side sibling of the scores-snapshot per-action-type surprise.
 - **Liked: `TXLineStablePriceDemargined`** — a demargined consensus feed means implied probabilities normalize to ~1.000 out of the box; our overround correction measured ≤0.1%. Great primitive for analytics UIs.
 - **Note: finished fixtures return `200 []`** on odds snapshot (fine, but worth documenting).
+
+
+---
+
+# Appendix: TxLINE's zero-value (non-membership) stat proofs — a community spec
+
+*We reverse-engineered this scheme because our receipts recompute every proof leg in the browser. Validated against the on-chain verifier: 12/12 real proofs across two fixtures accepted, 64/64 single-byte corruptions rejected, semantics confirmed by transaction simulation. Reference implementation: [`spike/txline_stat_verify.mjs`](spike/txline_stat_verify.mjs). Suggested docs text below — feel free to merge it nearly verbatim.*
+
+## The scheme
+
+One Merkle tree per (fixture, snapshot) roots at `eventStatRoot`. Its leaves are **all non-zero stats**, sorted ascending by key, hashed `sha256(key u32 LE ‖ value i32 LE ‖ period i32 LE)`, combined `sha256(left ‖ right)` with the duplicate-last-odd-node rule. A **zero-value** stat is not in the tree — it is proven ABSENT via a 2-node proof:
+
+| Node | Bytes | Meaning |
+|---|---|---|
+| A | `[0]` = `0x01` | header tag (node count). Wrong → `IndexOutOfBounds` (6073) |
+| A | `[1..31]` = `0xff` | fixed padding, must be exact → else `InvalidStatProof` (6023) |
+| B | `[0..7]` | **bitwise complement of a 64-slot presence bitmap**: byte = period bucket (0=full-time, 1=H1, 3=H2, … 0–7), bit `(stat_type − 1)` for stat types 1–8 (goals/yellows/reds/corners × home/away). Bit set in the complement ⇒ stat absent ⇒ value 0 |
+| B | `[8..31]` = `0x00` | zero padding |
+
+**Cryptographic binding:** the bitmap is committed in the fixture sub-tree as the **left sibling of `eventStatRoot`** — i.e. `sha256(nodeB) == subTreeProof[0].hash`. Since `subTreeProof` + `mainTreeProof` already fold to the on-chain daily root, the bitmap cannot be forged. (Equivalent when `updateCount == 1`: `sha256(sha256(nodeB) ‖ eventStatRoot) == eventStatsSubTreeRoot`.)
+
+## Verification algorithm (absent path)
+
+1. require `value == 0` (else `StatNotZero`, 6074)
+2. node A == `[0x01, 0xff×31]`, both nodes `isRightSibling == false`
+3. node B bytes 8..31 all zero
+4. `sha256(nodeB) == subTreeProof[0].hash` (else `InvalidStatProof`)
+5. `bucket = key / 1000 ∈ [0,7]`, `type = key % 1000 ∈ [1,8]` (else `IndexOutOfBounds`)
+6. `(nodeB[bucket] >> (type−1)) & 1 == 1` — the complement bit is set ⇒ absent ⇒ value 0 proven
+
+## Test vectors (England v Argentina, fixture 18241006, seq 962)
+
+- Presence bitmap complement (node B bytes 0–3): `30 33 33 74` → decodes to present keys `1,2,3,4,7,8,1003,1004,1007,1008,2003,2004,2007,2008,3001,3002,3004,3008` — exactly the match's non-zero stats.
+- `sha256(nodeB)` equals `subTreeProof[0].hash` in every zero-value proof served for this fixture (keys 1001, 1002, 3005, 3006).
+- A present key submitted through the absent path is rejected `StatNotZero`; flipping node A byte 0 → `IndexOutOfBounds`; flipping any node B byte → `InvalidStatProof`.
+
+*A bonus for integrators: node B alone is a compact "which stats exist" summary — decoding the complement enumerates every non-zero stat key of the match from 32 bytes.*

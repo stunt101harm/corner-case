@@ -67,11 +67,15 @@ Screen: receipt page of that settlement.
 > the daily root — was verified on-chain by TxLINE's own program inside the
 > settlement transaction. Trust nobody, verify everything."
 
-## 3:50–4:20 — Adversarial beat (check gates)
+## 3:50–4:20 — Adversarial beat: the /gates page ("Break in")
 
-Screen: terminal, pre-staged command; then a slide.
-- Run the prepared early-settle attempt against a mid-match proof (halftime
-  seq 425) → on-chain rejection `ProofNotFinal`.
+Screen: the deployed /gates page.
+- Click "Attack" on card 1 (settle at halftime): the REAL devnet tx lands
+  and fails on-chain — ProofNotFinal, gate #2, explorer link on screen.
+- Flash cards 2/3 (wrong stats → StatKeysMismatch, another match's proof →
+  FixtureMismatch) — already-fired rejection txs linked.
+- (Terminal fallback if preferred: scripts/demo_early_settle.mjs against
+  market BcRcXLQb7YTkQSvyxr9NRDYNYN79w28J1geoYo4LuQEz.)
 > "Can a keeper settle early with a mid-match proof, while 'no red cards so
 > far' is still true? No — proof leaves carry the match status; our finality
 > gate requires the game-finalised period on every leaf. Five check gates
@@ -86,7 +90,16 @@ B-roll: live ticker during the real 3rd-place match + the settle landing.
 > live, minutes after the final whistle, from TxLINE's real-time feed."
 (If the live capture failed: cut this beat, extend the demo-mode framing.)
 
-## 4:45–5:00 — Close (slide)
+## 4:40–4:55 — Two quick flexes (10s each)
+
+- /verify Inspector: paste any fixture/seq/keys — "an independent verifier
+  for ANY TxLINE proof, not just ours. We even reverse-engineered and
+  specced their undocumented zero-value non-membership proofs — the spec's
+  in our feedback doc."
+- Builder odds strip: "TxLINE's demargined consensus priced France at 51%
+  — you see the implied edge before you stake."
+
+## 4:55–5:00 — Close (slide)
 
 Architecture diagram mapped to the three judging criteria + links.
 > "Two market templates today; any provable stat is one strategy away.

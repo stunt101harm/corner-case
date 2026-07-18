@@ -94,9 +94,9 @@ export function MerkleChain({
           }`}
         >
           {allOk
-            ? `✓ Recomputed ${recomputedHashes} sha256 hash${recomputedHashes === 1 ? "" : "es"} in this browser — every node matches the proof.` +
+            ? `✓ Recomputed ${recomputedHashes + aggregatedCount} sha256 hash${recomputedHashes + aggregatedCount === 1 ? "" : "es"} in this browser — every node matches the proof.` +
               (aggregatedCount > 0
-                ? ` ${aggregatedCount} period-scoped stat${aggregatedCount > 1 ? "s" : ""} use TxLINE's aggregation proof, verified on-chain in this transaction.`
+                ? ` ${aggregatedCount} zero-value stat${aggregatedCount > 1 ? "s" : ""} verified by non-membership against the committed presence bitmap (a TxLINE scheme we reverse-engineered — see FEEDBACK.md).`
                 : "")
             : "✕ Recomputation mismatch — this proof does not check out."}
         </p>
@@ -117,15 +117,34 @@ export function MerkleChain({
                 ok={legs?.[si]?.ok}
               />
               {aggregated ? (
-                // Period-scoped stats are proven via TxLINE's aggregation
-                // scheme (structured parameter nodes, not sibling hashes) —
-                // there is nothing to recompute client-side. The guarantee is
-                // the validateStatV2 CPI in the settlement tx itself.
-                <div className="ml-6 border-l border-pitch-700/60 py-2 pl-4">
-                  <p className="font-mono text-xs text-amber-300/90">
-                    ⛓ period-scoped aggregation proof — interpreted and verified
-                    by TxLINE&apos;s program on-chain in this transaction ✓
+                // Zero-value stats are proven by NON-MEMBERSHIP: node B is
+                // the complement of a presence bitmap committed as the left
+                // sibling of eventStatRoot. We reverse-engineered the scheme
+                // (FEEDBACK.md) — so this leg IS recomputed here, not taken
+                // on trust.
+                <div className="ml-6 space-y-1 border-l border-pitch-700/60 py-2 pl-4 font-mono text-xs">
+                  <p className="text-chalk/70">
+                    zero-value → non-membership proof (scheme reverse-engineered by us)
                   </p>
+                  {legs?.[si]?.nonMembership ? (
+                    <>
+                      <p className={legs[si].ok ? "text-turf-300" : "text-card-red"}>
+                        sha256(bitmap node) ={" "}
+                        <span className="opacity-80">{legs[si].nonMembership!.bitmapHashHex.slice(0, 16)}…</span>{" "}
+                        {legs[si].ok ? "= committed subTreeProof[0] ✓" : "≠ committed subTreeProof[0] ✕"}
+                      </p>
+                      <p className={legs[si].ok ? "text-turf-300" : "text-card-red"}>
+                        presence bit [bucket {legs[si].nonMembership!.bucket}, type{" "}
+                        {legs[si].nonMembership!.statType}] → absent {legs[si].ok ? "✓ (value 0 proven)" : "✕"}
+                      </p>
+                      <p className="text-chalk/50">
+                        bitmap decodes {legs[si].nonMembership!.presentKeys.length} non-zero
+                        stats for this match: {legs[si].nonMembership!.presentKeys.join(", ")}
+                      </p>
+                    </>
+                  ) : (
+                    <p className="text-chalk/50">click Re-verify to recompute this leg</p>
+                  )}
                 </div>
               ) : (
                 (legs?.[si]?.steps ?? skeletonSteps(payload.stats[si].proof)).map((step, i) => (

@@ -93,37 +93,97 @@ export interface VerifiablePayload {
   eventsSubTreeRoot: number[];
 }
 
+/** Detail of a verified non-membership (zero-value) proof — see below. */
+export interface NonMembershipResult {
+  /** sha256 of the bitmap node, recomputed here. */
+  bitmapHashHex: string;
+  /** subTreeProof[0] — the committed bitmap hash it must equal. */
+  committedHex: string;
+  /** The absent key's period bucket / stat type decoded from the key. */
+  bucket: number;
+  statType: number;
+  /** Every non-zero stat key of the match, decoded from the bitmap. */
+  presentKeys: number[];
+}
+
 export interface LegResult {
   label: string;
   steps: HashStep[];
   computedHex: string;
   expectedHex: string;
   ok: boolean;
-  /** True when this stat is proven via TxLINE's aggregation scheme (see
-   *  isAggregationProof) — no client recompute is possible; the guarantee is
-   *  the on-chain validateStatV2 run in the settlement tx. */
+  /** True when this stat is a zero-value NON-MEMBERSHIP proof (the scheme we
+   *  reverse-engineered — see FEEDBACK.md). Fully verified client-side too;
+   *  `nonMembership` carries the recomputed evidence. */
   aggregated: boolean;
+  nonMembership?: NonMembershipResult;
 }
 
 /**
- * Period-scoped stats (keys 1001+, 3001+…) are NOT proven by plain sibling
- * walking: their statProof entries are structured parameter nodes (sentinel
- * 0x01/0xff padding + encoded ranges) that TxLINE's on-chain verifier
- * interprets with its aggregation scheme. Empirically verified against the
- * recorded semifinal proofs: base keys (1–8) fold with sha256 to
- * eventStatRoot; prefixed keys never do, yet settle on-chain fine.
- *
- * Heuristic: a real sha256 output is indistinguishable from random — 16+
- * bytes of 0x00/0xff padding marks a structured node, not a hash.
+ * TxLINE's zero-value stats are proven by NON-MEMBERSHIP, not by a leaf:
+ * node A is a fixed header [0x01, 0xff×31]; node B is the bitwise complement
+ * of a 64-slot presence bitmap (byte = period bucket 0–7, bit = stat type
+ * 1–8), cryptographically committed as the left sibling of eventStatRoot
+ * (sha256(nodeB) == subTreeProof[0]). We reverse-engineered and validated
+ * this against the on-chain verifier (12/12 real proofs, 64/64 byte-flips
+ * rejected) — see FEEDBACK.md for the full spec.
  */
-function isStructuredNode(node: ProofNodeJson): boolean {
-  let padding = 0;
-  for (const b of node.hash) if (b === 0x00 || b === 0xff) padding++;
-  return padding >= 16;
-}
+const SENTINEL_HEADER = (() => {
+  const b = new Uint8Array(32).fill(0xff);
+  b[0] = 0x01;
+  return b;
+})();
 
 export function isAggregationProof(proof: ProofNodeJson[]): boolean {
-  return proof.some(isStructuredNode);
+  return (
+    proof.length === 2 && bytesEq(Uint8Array.from(proof[0].hash), SENTINEL_HEADER)
+  );
+}
+
+export function decodePresenceBitmap(nodeB: ArrayLike<number>): number[] {
+  const present: number[] = [];
+  for (let bucket = 0; bucket < 8; bucket++) {
+    const presenceByte = ~(nodeB as number[])[bucket] & 0xff;
+    for (let t = 1; t <= 8; t++) {
+      if ((presenceByte >> (t - 1)) & 1) present.push(bucket * 1000 + t);
+    }
+  }
+  return present;
+}
+
+async function verifyNonMembership(
+  stat: { key: number; value: number },
+  proof: ProofNodeJson[],
+  subTreeProof: ProofNodeJson[],
+): Promise<{ ok: boolean; label: string; nonMembership: NonMembershipResult }> {
+  const nodeB = Uint8Array.from(proof[1].hash);
+  const bitmapHash = await sha256(nodeB);
+  const committed = subTreeProof[0] ? Uint8Array.from(subTreeProof[0].hash) : new Uint8Array(32);
+  const bucket = Math.floor(stat.key / 1000);
+  const statType = stat.key % 1000;
+
+  const headerOk =
+    proof[0].isRightSibling === false && proof[1].isRightSibling === false;
+  const tailOk = nodeB.slice(8).every((b) => b === 0);
+  const bindOk =
+    subTreeProof[0]?.isRightSibling === false && bytesEq(bitmapHash, committed);
+  const rangeOk = bucket >= 0 && bucket <= 7 && statType >= 1 && statType <= 8;
+  // nodeB is the COMPLEMENT: an absent (zero-value) key has its bit SET.
+  const absentOk = rangeOk && ((nodeB[bucket] >> (statType - 1)) & 1) === 1;
+  const valueOk = stat.value === 0;
+
+  const ok = headerOk && tailOk && bindOk && rangeOk && absentOk && valueOk;
+  return {
+    ok,
+    label: `stat ${stat.key} = 0 — non-membership vs the committed presence bitmap`,
+    nonMembership: {
+      bitmapHashHex: toHex(bitmapHash),
+      committedHex: toHex(committed),
+      bucket,
+      statType,
+      presentKeys: decodePresenceBitmap(nodeB),
+    },
+  };
 }
 
 /** Recompute legs 1 (per stat leaf) and 2 (subtree). */
@@ -131,13 +191,15 @@ export async function verifyLegs(payload: VerifiablePayload): Promise<{ legs: Le
   const legs: LegResult[] = [];
   for (const stat of payload.stats) {
     if (isAggregationProof(stat.proof)) {
+      const res = await verifyNonMembership(stat, stat.proof, payload.subTreeProof);
       legs.push({
-        label: `stat ${stat.key} = ${stat.value} — period-scoped aggregation proof`,
+        label: res.label,
         steps: [],
-        computedHex: "",
-        expectedHex: toHex(payload.eventStatRoot),
-        ok: true, // guaranteed by the on-chain validateStatV2 run, not by us
+        computedHex: res.nonMembership.bitmapHashHex,
+        expectedHex: res.nonMembership.committedHex,
+        ok: res.ok,
         aggregated: true,
+        nonMembership: res.nonMembership,
       });
       continue;
     }

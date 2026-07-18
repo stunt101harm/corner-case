@@ -63,11 +63,12 @@ never strand on a dead keeper or a TxLINE outage.
   `leaf = sha256(key u32 LE ‖ value i32 LE ‖ period i32 LE)`, folded
   `sha256(left ‖ right)` per `isRightSibling`. Verified: leaf → eventStatRoot
   → fixture subtree root, for all base keys.
-- **Period-prefixed keys use an undocumented aggregation scheme**: their
-  `statProofs` entries are structured parameter nodes (sentinel 0x01/0xff
-  padding), not sibling hashes — only TxLINE's on-chain verifier interprets
-  them. Receipts recompute plain-hash legs client-side and label aggregation
-  legs as on-chain-verified. (Full writeup in FEEDBACK.md.)
+- **Zero-value stats use an undocumented NON-MEMBERSHIP scheme, which we
+  fully reverse-engineered**: a fixed header node plus the complement of a
+  64-slot presence bitmap, committed as the left sibling of `eventStatRoot`
+  (`sha256(nodeB) == subTreeProof[0]`). Receipts recompute EVERY leg
+  client-side — membership and non-membership alike. Spec + test vectors +
+  reference verifier in FEEDBACK.md's appendix and `spike/txline_stat_verify.mjs`.
 - The devnet feed is the real tournament: the fixtures snapshot carried the
   3rd-place match and the final; `daily_scores_roots` gaps align with rest
   days; historical roots are retained for weeks (replay demos work).
