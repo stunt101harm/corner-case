@@ -32,7 +32,7 @@ The World Cup is over while you're reading this — the app doesn't care:
 Two fans stake USDC-dev against each other on props like *"total corners > 9.5"*, *"no red cards in the second half"*, or *"goals in the first half"*. The market account stores the exact TxLINE `validateStatV2` strategy **and** the ordered stat keys at creation — **what you sign is what settles**. When the match finalises, anyone may settle: the escrow program CPIs into TxLINE's on-chain validation program with the stored strategy and a caller-supplied Merkle proof. Payout is a deterministic pure function of cryptographically attested match data.
 
 - 🔮 **No oracle wallet** — settlement requires a valid Merkle proof against TxLINE's on-chain daily roots; the settle instruction is permissionless
-- 🧾 **Verifiable receipts** — every settlement shows the full proof chain and re-verifies **every leg in your browser** — including TxLINE's undocumented zero-value non-membership proofs, which we reverse-engineered and specced in [FEEDBACK.md](FEEDBACK.md)
+- 🧾 **Verifiable receipts** — every settlement re-verifies the **entire proof chain in your browser — down to the exact bytes of TxLINE's on-chain root account**; we reverse-engineered every undocumented layer (leaf domain tags, the non-membership presence bitmap, the account layout) and specced them all in [FEEDBACK.md](FEEDBACK.md)
 - 🛡️ **Five check gates** — each documented with the failure it prevents (below)
 - ⚽ **The long tail is the point** — match winners work on any oracle; per-half cards and corner counts are only trustlessly settleable because TxLINE Merkle-izes the whole stat tree
 

@@ -63,8 +63,12 @@ never strand on a dead keeper or a TxLINE outage.
   `leaf = sha256(key u32 LE ‖ value i32 LE ‖ period i32 LE)`, folded
   `sha256(left ‖ right)` per `isRightSibling`. Verified: leaf → eventStatRoot
   → fixture subtree root, for all base keys.
-- **Zero-value stats use an undocumented NON-MEMBERSHIP scheme, which we
-  fully reverse-engineered**: a fixed header node plus the complement of a
+- **The FULL proof chain is client-verifiable — we reverse-engineered every
+  undocumented layer**: the main-tree leaf is `sha256(0x01 ‖ borsh(summary))`
+  folded to the exact 32 bytes at slot `floor((minTs % day)/5min)` of the
+  on-chain `daily_scores_roots` account (10-byte header, self-describing
+  epoch day) — ground-truthed against TxLINE's own `insert_scores_root`
+  transactions. And zero-value stats use a NON-MEMBERSHIP scheme: a fixed header node plus the complement of a
   64-slot presence bitmap, committed as the left sibling of `eventStatRoot`
   (`sha256(nodeB) == subTreeProof[0]`). Receipts recompute EVERY leg
   client-side — membership and non-membership alike. Spec + test vectors +

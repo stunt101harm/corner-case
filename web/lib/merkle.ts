@@ -91,6 +91,43 @@ export interface VerifiablePayload {
   eventStatRoot: number[];
   subTreeProof: ProofNodeJson[];
   eventsSubTreeRoot: number[];
+  /** Leg-3 extras (when present, the chain is verified all the way to the
+   *  on-chain account bytes): the fixture summary + main-tree proof from the
+   *  payload, and the raw daily_scores_roots ACCOUNT DATA fetched via RPC. */
+  summary?: {
+    fixtureId: number;
+    updateCount: number;
+    minTimestamp: number;
+    maxTimestamp: number;
+  };
+  mainTreeProof?: ProofNodeJson[];
+  rootsAccountData?: Uint8Array;
+}
+
+/** On-chain daily_scores_roots layout (reverse-engineered, ground-truthed
+ *  against TxLINE's own insert_scores_root txs): 8B anchor discriminator +
+ *  u16 LE epoch_day, then 288 × 32B roots (one per 5-min batch), then bump
+ *  + padding. Main-tree leaf = sha256(0x01 ‖ borsh(ScoresBatchSummary)) —
+ *  the 0x01 is a leaf-domain tag. Full spec in FEEDBACK.md. */
+const ROOTS_ACCT_HEADER = 10;
+
+export function slotIndexFor(minTimestampMs: number): number {
+  return Math.floor((minTimestampMs % 86_400_000) / 300_000);
+}
+
+async function summaryLeafHash(
+  summary: NonNullable<VerifiablePayload["summary"]>,
+  eventsSubTreeRoot: number[],
+): Promise<Uint8Array> {
+  const b = new Uint8Array(61);
+  const v = new DataView(b.buffer);
+  b[0] = 0x01; // leaf-domain tag
+  v.setBigInt64(1, BigInt(summary.fixtureId), true);
+  v.setInt32(9, summary.updateCount, true);
+  v.setBigInt64(13, BigInt(summary.minTimestamp), true);
+  v.setBigInt64(21, BigInt(summary.maxTimestamp), true);
+  b.set(Uint8Array.from(eventsSubTreeRoot), 29);
+  return sha256(b);
 }
 
 /** Detail of a verified non-membership (zero-value) proof — see below. */
@@ -223,5 +260,25 @@ export async function verifyLegs(payload: VerifiablePayload): Promise<{ legs: Le
     ok: bytesEq(sub.root, payload.eventsSubTreeRoot),
     aggregated: false,
   });
+
+  // Leg 3 — summary → main tree → the EXACT bytes TxLINE posted on-chain.
+  // Only runs when the caller supplied the summary + the fetched account.
+  if (payload.summary && payload.mainTreeProof && payload.rootsAccountData) {
+    const leaf = await summaryLeafHash(payload.summary, payload.eventsSubTreeRoot);
+    const { root, steps } = await foldProof(leaf, payload.mainTreeProof);
+    const idx = slotIndexFor(payload.summary.minTimestamp);
+    const acct = payload.rootsAccountData;
+    const slot = acct.slice(ROOTS_ACCT_HEADER + idx * 32, ROOTS_ACCT_HEADER + idx * 32 + 32);
+    const acctDay = acct.length > 9 ? acct[8] | (acct[9] << 8) : -1;
+    const expectedDay = Math.floor(payload.summary.minTimestamp / 86_400_000);
+    legs.push({
+      label: `fixture summary → daily root (5-min batch slot ${idx}) vs ON-CHAIN account bytes`,
+      steps,
+      computedHex: toHex(root),
+      expectedHex: toHex(slot),
+      ok: bytesEq(root, slot) && slot.length === 32 && acctDay === expectedDay,
+      aggregated: false,
+    });
+  }
   return { legs, ok: legs.every((l) => l.ok) };
 }

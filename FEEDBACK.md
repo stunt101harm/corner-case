@@ -69,3 +69,14 @@ One Merkle tree per (fixture, snapshot) roots at `eventStatRoot`. Its leaves are
 - A present key submitted through the absent path is rejected `StatNotZero`; flipping node A byte 0 → `IndexOutOfBounds`; flipping any node B byte → `InvalidStatProof`.
 
 *A bonus for integrators: node B alone is a compact "which stats exist" summary — decoding the complement enumerates every non-zero stat key of the match from 32 bytes.*
+
+
+## Appendix 2: the main-tree leg (summary → on-chain daily root) — completing the chain
+
+*With this, the ENTIRE `validate_stat_v2` proof chain is client-verifiable against the raw on-chain account bytes. Ground truth was recovered by decoding TxLINE's own `insert_scores_root` transactions.*
+
+- **Main-tree leaf** = `sha256(0x01 ‖ borsh(ScoresBatchSummary))` — a 61-byte preimage: `0x01` leaf-domain tag ‖ `fixture_id i64 LE` ‖ `update_count i32 LE` ‖ `min_timestamp i64 LE` ‖ `max_timestamp i64 LE` ‖ `events_sub_tree_root[32]`. (The undocumented `0x01` domain tag is what defeats naive reimplementations.)
+- **Fold** with the same `sha256(left ‖ right)` / `isRightSibling` convention as every other leg.
+- **`daily_scores_roots` account layout**: 8-byte anchor discriminator `d90c0c170ab7737d` ‖ `epoch_day u16 LE` (self-describing!) ‖ `288 × [u8;32]` batch roots ‖ `bump u8` ‖ 5 pad bytes = 9,232 bytes. **The header is 10 bytes, not 16** — a misread here makes every slot straddle two roots.
+- **Slot formula**: `slot = floor((min_timestamp % 86_400_000) / 300_000)` (= `hour*12 + minute/5`, matching the `insert_scores_root(epoch_day, hour, minute, root)` instruction; roots post ~44 s after each 5-minute window closes).
+- Validated: 10/10 full-chain verifications across two fixtures, three seqs, four slots, and two epoch days; adversarial mutations (bit flips, `updateCount+1`, `fixtureId+1`, timestamp nudges) all rejected. Reference: [`spike/txline_full_chain_verify.mjs`](spike/txline_full_chain_verify.mjs).
