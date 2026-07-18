@@ -80,3 +80,9 @@ One Merkle tree per (fixture, snapshot) roots at `eventStatRoot`. Its leaves are
 - **`daily_scores_roots` account layout**: 8-byte anchor discriminator `d90c0c170ab7737d` ‖ `epoch_day u16 LE` (self-describing!) ‖ `288 × [u8;32]` batch roots ‖ `bump u8` ‖ 5 pad bytes = 9,232 bytes. **The header is 10 bytes, not 16** — a misread here makes every slot straddle two roots.
 - **Slot formula**: `slot = floor((min_timestamp % 86_400_000) / 300_000)` (= `hour*12 + minute/5`, matching the `insert_scores_root(epoch_day, hour, minute, root)` instruction; roots post ~44 s after each 5-minute window closes).
 - Validated: 10/10 full-chain verifications across two fixtures, three seqs, four slots, and two epoch days; adversarial mutations (bit flips, `updateCount+1`, `fixtureId+1`, timestamp nudges) all rejected. Reference: [`spike/txline_full_chain_verify.mjs`](spike/txline_full_chain_verify.mjs).
+
+## 2026-07-18 (odds stream)
+
+- **`/odds/stream` inconsistencies vs `/scores/stream`:** heartbeat blocks put `data:` BEFORE `event: heartbeat` (scores is event-first); odds `id:` is `<5min-bucket-ms>:<offset>` not `Seq`; heartbeat `Ts` is epoch seconds while record `Ts` is ms. A consumer written against the scores stream needs small tweaks.
+- **Stream entries are a superset of the snapshot** (extra `MessageId`, `GameState`), carry every fixture with quoted markets (client-side FixtureId filtering mandatory), and `Pct` is still `"NA"` on some market types — recompute from `Prices` (decimal×1000).
+- **Liked:** one entry per SSE block (never batched), so browser `onmessage` parsing is trivial; and the demargined consensus makes it a clean analytics primitive.

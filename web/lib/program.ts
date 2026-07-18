@@ -77,6 +77,20 @@ export function deriveTxlineRootsPda(epochDay: number): PublicKey {
   return PublicKey.findProgramAddressSync([Buffer.from("daily_scores_roots"), le], TXLINE_PROGRAM_ID)[0];
 }
 
+/**
+ * Fetch the raw bytes of TxLINE's on-chain daily_scores_roots account for a
+ * given epoch day — the ground truth leg-3 verification compares against.
+ * Returns null if the account doesn't exist (that day never posted), so the
+ * caller can degrade to legs 1+2 instead of erroring.
+ */
+export async function fetchRootsAccountData(
+  connection: Connection,
+  epochDay: number,
+): Promise<Uint8Array | null> {
+  const info = await connection.getAccountInfo(deriveTxlineRootsPda(epochDay));
+  return info ? Uint8Array.from(info.data) : null;
+}
+
 // ---------------------------------------------------------------------------
 // Reads
 // ---------------------------------------------------------------------------

@@ -131,7 +131,8 @@ async function record(args: CliArgs): Promise<void> {
       .join(" | ");
     log(
       `[heartbeat] records=${recorder.counters.records} snapshots=${recorder.counters.snapshots} ` +
-        `streamDrops=${recorder.counters.streamDrops} :: ${states}`,
+        `streamDrops=${recorder.counters.streamDrops} odds=${recorder.counters.oddsRecords} ` +
+        `oddsDrops=${recorder.counters.oddsStreamDrops} :: ${states}`,
     );
   }, 60_000);
 

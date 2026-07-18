@@ -23,6 +23,7 @@ import path from "node:path";
 import { sleep } from "./auth";
 import {
   summariseSnapshot,
+  type OddsRecord,
   type ScoreRecord,
   type SseEvent,
   type StatValidationResponse,
@@ -109,6 +110,7 @@ export class Recorder {
   private readonly wantCompetitionId?: number;
 
   private stream: StreamHandle | null = null;
+  private oddsStream: StreamHandle | null = null;
   private snapshotTimer: NodeJS.Timeout | null = null;
   private stopped = false;
   /** Fixtures with a proof-fetch loop running or completed (once per run). */
@@ -119,7 +121,7 @@ export class Recorder {
    */
   private appendChains = new Map<string, Promise<void>>();
   /** Live counters for the heartbeat log line. */
-  readonly counters = { records: 0, snapshots: 0, streamDrops: 0 };
+  readonly counters = { records: 0, snapshots: 0, streamDrops: 0, oddsRecords: 0, oddsStreamDrops: 0 };
 
   constructor(opts: RecorderOptions) {
     this.client = opts.client;
@@ -165,6 +167,11 @@ export class Recorder {
       { idleTimeoutMs: 90_000 },
     );
 
+    // Odds capture is strictly additive decoration on top of the scores
+    // recording — its consumer is separate and independently wrapped, so no
+    // odds failure of any kind can touch the scores capture.
+    this.startOddsStream();
+
     this.snapshotTimer = setInterval(() => {
       void this.pollSnapshots();
     }, this.snapshotIntervalMs);
@@ -184,7 +191,11 @@ export class Recorder {
     this.stopped = true;
     if (this.snapshotTimer) clearInterval(this.snapshotTimer);
     this.stream?.stop();
+    this.oddsStream?.stop();
     await this.stream?.done;
+    // allSettled, not await: even a misbehaving odds loop cannot block the
+    // scores flush below.
+    await Promise.allSettled([this.oddsStream?.done ?? Promise.resolve()]);
     // Let in-flight file appends land before the process exits.
     await Promise.allSettled([...this.appendChains.values()]);
     this.registry.flush();
@@ -253,6 +264,58 @@ export class Recorder {
       "halftime_finalised",
       "game_finalised",
     ].includes(record.Action);
+  }
+
+  // -- odds stream path (additive; must never affect scores capture) --------
+
+  /**
+   * Open the /odds/stream consumer and capture updates for tracked fixtures
+   * verbatim to <id>.odds.sse — the same robustness contract as the scores
+   * recording (append-only, arrival order, disk errors logged and swallowed),
+   * but on its OWN upstream connection, its own files and its own counters.
+   * Public so a verification harness can drive exactly this consumer against
+   * a temp outDir without running the full recorder.
+   */
+  startOddsStream(): void {
+    try {
+      this.oddsStream = this.client.streamOdds(
+        {
+          onRecord: (record, raw) => this.onOddsRecord(record, raw),
+          onStatus: (s) => {
+            try {
+              if (s.type === "retry") this.counters.oddsStreamDrops++;
+              if (s.type !== "connecting") {
+                this.log(
+                  `[odds-stream] ${s.type}${s.attempt !== undefined ? ` attempt=${s.attempt}` : ""}` +
+                    `${s.waitMs !== undefined ? ` wait=${Math.round(s.waitMs / 1000)}s` : ""}` +
+                    `${s.detail ? ` (${s.detail})` : ""}`,
+                );
+              }
+            } catch {
+              // Even a broken log line must not surface into the stream loop.
+            }
+          },
+        },
+        // Odds heartbeats arrive every ~15s; 90s of silence means a dead socket.
+        { idleTimeoutMs: 90_000 },
+      );
+    } catch (err) {
+      // Belt and braces: streamOdds does not throw synchronously today, but if
+      // it ever does, the scores recording must carry on regardless.
+      this.log(`[recorder] odds stream failed to start (scores capture unaffected): ${String(err)}`);
+    }
+  }
+
+  private onOddsRecord(record: OddsRecord, raw: SseEvent): void {
+    try {
+      if (!this.registry.isTracked(record.FixtureId)) return; // stream carries ALL fixtures
+      this.counters.oddsRecords++;
+      this.append(this.file(record.FixtureId, ".odds.sse"), raw.raw);
+    } catch (err) {
+      // streamOdds already guards onRecord, but this consumer must be
+      // independently safe by construction.
+      this.log(`[recorder] odds record handling failed (scores capture unaffected): ${String(err)}`);
+    }
   }
 
   // -- snapshot polling path ------------------------------------------------

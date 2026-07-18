@@ -10,13 +10,15 @@
  */
 
 import { useMemo, useState } from "react";
+import { Connection } from "@solana/web3.js";
 import { useFixtures } from "@/lib/hooks";
 import { getProof } from "@/lib/relay";
+import { MatchFingerprint } from "@/components/MatchFingerprint";
 import { verifyLegs, toHex, type LegResult } from "@/lib/merkle";
 import { statKeyName } from "@/lib/strategy";
-import { deriveTxlineRootsPda } from "@/lib/program";
+import { deriveTxlineRootsPda, fetchRootsAccountData } from "@/lib/program";
 import { fixtureDisplay } from "@/lib/fixtures";
-import { DEMO_FIXTURE_ID, KNOWN_FIXTURES, epochDayFromMs, explorerAddress } from "@/lib/constants";
+import { DEMO_FIXTURE_ID, KNOWN_FIXTURES, RPC_URL, epochDayFromMs, explorerAddress } from "@/lib/constants";
 import type { StatValidationJson } from "@/lib/types";
 
 const MAX_KEYS = 5;
@@ -83,12 +85,30 @@ export default function VerifyPage(): React.ReactNode {
     setBusy(true);
     try {
       const proof = await getProof(fid, s, parsedKeys);
+      const minTs = proof.summary.updateStats.minTimestamp;
+      const day = epochDayFromMs(minTs);
+      // Fetch TxLINE's on-chain roots account so leg 3 verifies to the bytes.
+      let rootsAccountData: Uint8Array | undefined;
+      try {
+        rootsAccountData =
+          (await fetchRootsAccountData(new Connection(RPC_URL, "confirmed"), day)) ?? undefined;
+      } catch {
+        rootsAccountData = undefined;
+      }
       // The SAME verification the settlement receipts run (lib/merkle.ts).
       const { legs, ok } = await verifyLegs({
         stats: proof.statsToProve.map((st, i) => ({ ...st, proof: proof.statProofs[i] ?? [] })),
         eventStatRoot: proof.eventStatRoot,
         subTreeProof: proof.subTreeProof,
         eventsSubTreeRoot: proof.summary.eventStatsSubTreeRoot,
+        summary: {
+          fixtureId: Number(proof.summary.fixtureId),
+          updateCount: proof.summary.updateStats.updateCount,
+          minTimestamp: minTs,
+          maxTimestamp: proof.summary.updateStats.maxTimestamp,
+        },
+        mainTreeProof: proof.mainTreeProof,
+        rootsAccountData,
       });
       setResult({
         proof,
@@ -266,6 +286,14 @@ function ProofView({
                       ⛓ period-scoped aggregation proof — interpreted and verified on-chain by
                       TxLINE&apos;s validateStatV2, exactly as in every settlement tx
                     </span>
+                    {leg.nonMembership && (
+                      <MatchFingerprint
+                        presentKeys={leg.nonMembership.presentKeys}
+                        absentKey={stat.key}
+                        home={f.home}
+                        away={f.away}
+                      />
+                    )}
                   </div>
                 ) : (
                   leg?.steps.map((step, i) => (

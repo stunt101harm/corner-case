@@ -232,6 +232,28 @@ export interface StreamHandlers {
   onStatus?: (status: StreamStatus) => void;
 }
 
+/**
+ * One odds update from /odds/stream. Verified live (2026-07-18): each SSE
+ * block is a SINGLE entry in exactly the /odds/snapshot shape plus MessageId
+ * and GameState; blocks are unnamed `data:` + `id:` lines (no `event:` field,
+ * so browser EventSource onmessage sees them); heartbeats are
+ * `event: heartbeat` every ~15s; the stream carries ALL fixtures. Only the
+ * fields the keeper routes on are typed — everything else passes through
+ * verbatim.
+ */
+export interface OddsRecord {
+  FixtureId: number;
+  /** Update time, epoch ms — drives replay interleaving. */
+  Ts: number;
+  [key: string]: unknown;
+}
+
+export interface OddsStreamHandlers {
+  /** Called once per parsed odds update; `raw` is the verbatim SSE block. */
+  onRecord: (record: OddsRecord, raw: SseEvent) => void;
+  onStatus?: (status: StreamStatus) => void;
+}
+
 export interface StreamHandle {
   stop(): void;
   /** Resolves when the loop has fully wound down after stop(). */
@@ -447,6 +469,115 @@ export class TxlineClient {
           try {
             for await (const chunk of res.body as AsyncIterable<Uint8Array>) {
               lastActivity = Date.now(); // any bytes (incl. heartbeats) count as life
+              for (const ev of parser.push(decoder.decode(chunk, { stream: true }))) {
+                deliver(ev);
+              }
+            }
+            for (const ev of parser.end()) deliver(ev);
+          } finally {
+            clearInterval(watchdog);
+          }
+          emitStatus({ type: "closed", detail: "server ended stream" });
+        } catch (err) {
+          if (!stopped) emitStatus({ type: "closed", detail: String(err) });
+        }
+        if (stopped) break;
+        if (Date.now() - connectedAt > STABLE_CONNECTION_MS) attempt = 0;
+        const waitMs = jitteredBackoff(attempt++);
+        emitStatus({ type: "retry", attempt, waitMs });
+        await sleepUnlessStopped(waitMs, () => stopped);
+      }
+      emitStatus({ type: "stopped" });
+    })();
+
+    return {
+      stop(): void {
+        stopped = true;
+        controller?.abort(new Error("stopped by caller"));
+      },
+      done,
+    };
+  }
+
+  /**
+   * Live odds SSE consumer (/odds/stream) — a deliberate structural twin of
+   * streamScores rather than a shared abstraction: odds capture is strictly
+   * additive decoration, and the scores loop is battle-tested code that live
+   * recorders depend on, so it stays byte-identical and untouched. Same
+   * reconnect ladder, same idle watchdog, same heartbeat filtering.
+   */
+  streamOdds(handlers: OddsStreamHandlers, opts: StreamOptions = {}): StreamHandle {
+    const idleTimeoutMs = opts.idleTimeoutMs ?? 120_000;
+    let stopped = false;
+    let controller: AbortController | null = null;
+    let lastEventId = opts.lastEventId;
+
+    const emitStatus = (status: StreamStatus): void => {
+      try {
+        handlers.onStatus?.(status);
+      } catch {
+        // A logging callback must never be able to kill the stream loop.
+      }
+    };
+
+    const deliver = (ev: SseEvent): void => {
+      if (ev.id !== undefined) lastEventId = ev.id;
+      if (!ev.data) return;
+      // Verified live: `event: heartbeat` + `data: {"Ts":...}` every ~15s —
+      // liveness for the watchdog, never delivered to consumers.
+      if (ev.event === "heartbeat") return;
+      let record: OddsRecord;
+      try {
+        record = JSON.parse(ev.data) as OddsRecord;
+      } catch {
+        emitStatus({ type: "error", detail: `unparseable data block: ${ev.data.slice(0, 120)}` });
+        return;
+      }
+      if (typeof record.FixtureId !== "number") {
+        emitStatus({ type: "error", detail: `data block without FixtureId: ${ev.data.slice(0, 120)}` });
+        return;
+      }
+      try {
+        handlers.onRecord(record, ev);
+      } catch (err) {
+        // A consumer bug on one update must not tear down the whole stream.
+        emitStatus({ type: "error", detail: `onRecord threw: ${String(err)}` });
+      }
+    };
+
+    const done = (async () => {
+      let attempt = 0;
+      while (!stopped) {
+        controller = new AbortController();
+        const connectedAt = Date.now();
+        try {
+          emitStatus({ type: "connecting", attempt });
+          const headers: Record<string, string> = { Accept: "text/event-stream" };
+          if (lastEventId !== undefined) headers["Last-Event-ID"] = lastEventId;
+          const res = await this.auth.authedFetch("/odds/stream", {
+            headers,
+            signal: controller.signal,
+            noTimeout: true,
+          });
+          if (!res.ok || !res.body) {
+            throw new Error(`odds stream connect → HTTP ${res.status}`);
+          }
+          emitStatus({ type: "open" });
+
+          let lastActivity = Date.now();
+          const ctl = controller;
+          const watchdog = setInterval(() => {
+            if (Date.now() - lastActivity > idleTimeoutMs) {
+              ctl.abort(new Error(`idle ${idleTimeoutMs}ms — reconnecting`));
+            }
+          }, 5_000);
+          watchdog.unref?.();
+
+          const parser = new SseParser();
+          const decoder = new TextDecoder();
+          try {
+            for await (const chunk of res.body as AsyncIterable<Uint8Array>) {
+              lastActivity = Date.now();
               for (const ev of parser.push(decoder.decode(chunk, { stream: true }))) {
                 deliver(ev);
               }

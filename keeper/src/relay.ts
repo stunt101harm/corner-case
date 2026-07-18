@@ -37,7 +37,14 @@ import {
 } from "@solana/spl-token";
 import { TxlineAuth } from "./auth";
 import { TxlineClient, type FixtureMeta, type StreamHandle } from "./txline";
-import { loadRecording, replayFile } from "./replay";
+import {
+  interleaveOddsBlocks,
+  loadOddsRecording,
+  loadRecording,
+  replayBlocks,
+  replayFile,
+  tagSseEvent,
+} from "./replay";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -54,7 +61,10 @@ const FAUCET_WINDOW_MS = 10 * 60_000;
 const FAUCET_SOL_LAMPORTS = 50_000_000; // 0.05 SOL — fees + rent for a few markets
 const FAUCET_USDC_BASE_UNITS = 1_000_000_000n; // 1000 USDC-dev (6 decimals)
 
-const RECORDINGS_DIR = fileURLToPath(new URL("../../recordings", import.meta.url));
+// Env override exists for verification harnesses (point the replay resolver
+// at a temp dir); production never sets it and gets the repo recordings/.
+const RECORDINGS_DIR =
+  process.env.RECORDINGS_DIR ?? fileURLToPath(new URL("../../recordings", import.meta.url));
 const SETTLEMENTS_PATH = fileURLToPath(new URL("../settlements.jsonl", import.meta.url));
 
 /**
@@ -88,16 +98,17 @@ const FALLBACK_FIXTURES: FixtureMeta[] = [
 // ---------------------------------------------------------------------------
 
 /**
- * One upstream /scores/stream connection shared by every browser client.
- * The upstream connects lazily on the first subscriber and disconnects when
- * the last one leaves — after the tournament the stream is silent anyway, and
- * holding a permanent idle upstream SSE buys nothing.
+ * One upstream SSE connection shared by every browser client. The upstream
+ * connects lazily on the first subscriber and disconnects when the last one
+ * leaves — after the tournament the stream is silent anyway, and holding a
+ * permanent idle upstream SSE buys nothing. The connect function decides
+ * WHICH upstream (scores or odds); the fan-out mechanics are identical.
  */
 class StreamHub {
   private readonly clients = new Set<http.ServerResponse>();
   private handle: StreamHandle | null = null;
 
-  constructor(private readonly client: TxlineClient) {}
+  constructor(private readonly connect: (broadcast: (text: string) => void) => StreamHandle) {}
 
   get size(): number {
     return this.clients.size;
@@ -106,14 +117,7 @@ class StreamHub {
   add(res: http.ServerResponse): void {
     this.clients.add(res);
     if (!this.handle) {
-      this.handle = this.client.streamScores({
-        // raw.raw is the upstream block verbatim (incl. `id:` line) — browsers
-        // see byte-identical SSE whether it came from TxLINE or a recording.
-        onRecord: (_record, raw) => this.broadcast(raw.raw),
-        // Status transitions go out as SSE comments: visible in curl for
-        // debugging, invisible to EventSource consumers.
-        onStatus: (s) => this.broadcast(`: upstream ${s.type}${s.detail ? ` ${s.detail}` : ""}\n\n`),
-      });
+      this.handle = this.connect((text) => this.broadcast(text));
     }
   }
 
@@ -156,7 +160,24 @@ export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
   const startedAt = Date.now();
   const auth = new TxlineAuth();
   const client = new TxlineClient(auth);
-  const hub = new StreamHub(client);
+  const hub = new StreamHub((broadcast) =>
+    client.streamScores({
+      // raw.raw is the upstream block verbatim (incl. `id:` line) — browsers
+      // see byte-identical SSE whether it came from TxLINE or a recording.
+      onRecord: (_record, raw) => broadcast(raw.raw),
+      // Status transitions go out as SSE comments: visible in curl for
+      // debugging, invisible to EventSource consumers.
+      onStatus: (s) => broadcast(`: upstream ${s.type}${s.detail ? ` ${s.detail}` : ""}\n\n`),
+    }),
+  );
+  // Same fan-out for /odds/stream — its own upstream connection, so an odds
+  // hiccup can never touch the scores stream (odds are decoration).
+  const oddsHub = new StreamHub((broadcast) =>
+    client.streamOdds({
+      onRecord: (_record, raw) => broadcast(raw.raw),
+      onStatus: (s) => broadcast(`: upstream ${s.type}${s.detail ? ` ${s.detail}` : ""}\n\n`),
+    }),
+  );
   const connection = new Connection(opts.rpcUrl ?? process.env.RPC_URL ?? DEFAULT_RPC_URL, "confirmed");
 
   // -- fixtures cache -------------------------------------------------------
@@ -364,11 +385,14 @@ export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
   }
 
   /**
-   * Find the recording for a fixture: committed recordings first, then raw
+   * Find a recording for a fixture: committed recordings first, then raw
    * captures. Matched by filename prefix so the committed
    * `18241006-england-argentina-semi.sse` resolves from just the id.
+   * The predicate must be exact about suffixes: `<id>.odds.sse` ALSO ends in
+   * `.sse`, and in recordings/raw it would sort BEFORE `<id>.sse` — without
+   * the exclusion, recording odds would silently break the scores replay.
    */
-  function findRecording(fixtureId: string): string | null {
+  function findRecordingBy(fixtureId: string, matches: (f: string) => boolean): string | null {
     for (const dir of [RECORDINGS_DIR, path.join(RECORDINGS_DIR, "raw")]) {
       let entries: string[];
       try {
@@ -376,12 +400,18 @@ export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
       } catch {
         continue;
       }
-      const match = entries
-        .filter((f) => f.startsWith(fixtureId) && f.endsWith(".sse"))
-        .sort()[0];
+      const match = entries.filter((f) => f.startsWith(fixtureId) && matches(f)).sort()[0];
       if (match) return path.join(dir, match);
     }
     return null;
+  }
+
+  function findRecording(fixtureId: string): string | null {
+    return findRecordingBy(fixtureId, (f) => f.endsWith(".sse") && !f.endsWith(".odds.sse"));
+  }
+
+  function findOddsRecording(fixtureId: string): string | null {
+    return findRecordingBy(fixtureId, (f) => f.endsWith(".odds.sse"));
   }
 
   // -- settlements journal --------------------------------------------------
@@ -483,7 +513,8 @@ export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
       sendJson(res, parts.length === 0 ? 200 : 404, {
         service: "corner-case relay",
         endpoints: [
-          "GET /api/fixtures", "GET /api/stream", "GET /api/replay/:fixtureId?speed=30|max",
+          "GET /api/fixtures", "GET /api/stream", "GET /api/odds-stream",
+          "GET /api/replay/:fixtureId?speed=30|max",
           "GET /api/proof/:fixtureId?seq=N&keys=1,2", "GET /api/snapshot/:fixtureId",
           "GET /api/odds/:fixtureId", "POST /api/faucet {wallet}", "GET /api/settlements",
           "GET /api/health",
@@ -522,6 +553,18 @@ export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
         return;
       }
 
+      case "odds-stream": {
+        // Fan-out of TxLINE's /odds/stream, verbatim blocks — the browser
+        // filters by FixtureId, exactly like it does for /api/stream.
+        const stopHb = openSse(res);
+        oddsHub.add(res);
+        req.on("close", () => {
+          stopHb();
+          oddsHub.remove(res);
+        });
+        return;
+      }
+
       case "replay": {
         if (!param || !/^\d+$/.test(param)) {
           sendJson(res, 400, { error: "usage: /api/replay/:fixtureId?speed=30|max" });
@@ -550,19 +593,48 @@ export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
           stopHb();
           abort.abort();
         });
-        const result = await replayFile(
-          prepareReplayFile(file),
-          {
-            onRecord: (_record, raw) => {
+        const oddsFile = findOddsRecording(param);
+        let result: { records: number; effectiveSpeed: number; aborted: boolean };
+        if (oddsFile) {
+          // Combined replay: recorded odds updates interleaved by Ts into the
+          // score stream, each odds block re-tagged `event: odds` so an
+          // EventSource client can tell them apart (scores stay the default
+          // unnamed events, byte-identical to a plain replay).
+          const scores = loadRecording(prepareReplayFile(file)).map((e) => ({
+            ts: e.record.Ts,
+            raw: e.raw.raw,
+          }));
+          const odds = loadOddsRecording(oddsFile).map((b) => ({
+            ts: b.ts,
+            raw: tagSseEvent(b.raw, "odds"),
+          }));
+          result = await replayBlocks(
+            interleaveOddsBlocks(scores, odds),
+            (raw) => {
               try {
-                res.write(raw.raw);
+                res.write(raw);
               } catch {
                 abort.abort();
               }
             },
-          },
-          { speed, signal: abort.signal },
-        );
+            { speed, signal: abort.signal },
+          );
+        } else {
+          // No odds recording → the exact pre-existing replay path, untouched.
+          result = await replayFile(
+            prepareReplayFile(file),
+            {
+              onRecord: (_record, raw) => {
+                try {
+                  res.write(raw.raw);
+                } catch {
+                  abort.abort();
+                }
+              },
+            },
+            { speed, signal: abort.signal },
+          );
+        }
         if (!abort.signal.aborted) {
           // Explicit end-of-replay event so the UI can show "match complete"
           // without heuristics. EventSource clients must close on it or the

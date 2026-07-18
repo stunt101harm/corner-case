@@ -84,6 +84,55 @@ export const RECORDINGS: Record<string, ReplayEntry[]> = {
   "18241006": SEMI_ENTRIES,
 };
 
+/**
+ * Re-tag a raw SSE block with an `event:` name so replay clients can tell
+ * odds blocks from score blocks on one connection (mirrors keeper/src/
+ * replay.ts tagSseEvent). Existing event lines are dropped first.
+ */
+export function tagSseEvent(raw: string, name: string): string {
+  const body = raw
+    .split("\n")
+    .filter((line) => !line.startsWith("event:"))
+    .join("\n");
+  return `event: ${name}\n${body}`;
+}
+
+/** Parse a recorded .odds.sse text into replay entries, pre-tagged
+ *  `event: odds`. parseRecording works verbatim on odds files: each data
+ *  block is JSON with a Ts, and no block has Action "kickoff". */
+export function parseOddsRecording(text: string): ReplayEntry[] {
+  return parseRecording(text).entries.map((e) => ({ ts: e.ts, raw: tagSseEvent(e.raw, "odds") }));
+}
+
+/**
+ * fixtureId → odds replay entries, interleaved into /api/replay by Ts. None
+ * are bundled yet: to add one, drop `<id>.odds.sse` into src/assets/, import
+ * it like the semi recording, and register `parseOddsRecording(text)` here.
+ * An absent entry leaves the replay byte-identical to the pre-odds behavior.
+ */
+export const ODDS_RECORDINGS: Record<string, ReplayEntry[]> = {};
+
+/**
+ * Merge score entries with odds entries by ts (mirrors keeper/src/replay.ts
+ * interleaveOddsBlocks): score order is preserved exactly; odds outside the
+ * scores' ts range are dropped — pre-kickoff quotes would re-expand the span
+ * the kickoff trim removed, post-final ones would delay replay_done.
+ */
+function interleaveOdds(scores: ReplayEntry[], odds: ReplayEntry[]): ReplayEntry[] {
+  if (scores.length === 0) return [...scores];
+  const first = scores[0].ts;
+  const last = scores[scores.length - 1].ts;
+  const clamped = odds.filter((o) => o.ts >= first && o.ts <= last).sort((a, b) => a.ts - b.ts);
+  const out: ReplayEntry[] = [];
+  let j = 0;
+  for (const s of scores) {
+    while (j < clamped.length && clamped[j].ts < s.ts) out.push(clamped[j++]);
+    out.push(s);
+  }
+  while (j < clamped.length) out.push(clamped[j++]);
+  return out;
+}
+
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 export interface ReplayHandle {
@@ -92,7 +141,18 @@ export interface ReplayHandle {
   done: Promise<void>;
 }
 
-export function streamReplay(entries: ReplayEntry[], speed: number | "max", signal: AbortSignal): ReplayHandle {
+export function streamReplay(
+  entries: ReplayEntry[],
+  speed: number | "max",
+  signal: AbortSignal,
+  oddsEntries?: ReplayEntry[],
+): ReplayHandle {
+  // No odds (the only case in production until an odds asset is bundled) →
+  // `entries` passes through untouched and the loop below is byte-identical
+  // to the pre-odds behavior.
+  if (oddsEntries && oddsEntries.length > 0) {
+    entries = interleaveOdds(entries, oddsEntries);
+  }
   const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
   const writer = writable.getWriter();
   const encoder = new TextEncoder();

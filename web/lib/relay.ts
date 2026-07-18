@@ -55,6 +55,11 @@ export function streamUrl(): string {
   return `${RELAY_URL}/api/stream`;
 }
 
+/** Live odds fan-out (all fixtures; the client filters by FixtureId). */
+export function oddsStreamUrl(): string {
+  return `${RELAY_URL}/api/odds-stream`;
+}
+
 export function replayUrl(fixtureId: number, speed: number | "max" = 30): string {
   return `${RELAY_URL}/api/replay/${fixtureId}?speed=${speed}`;
 }

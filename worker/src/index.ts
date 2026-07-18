@@ -11,7 +11,8 @@
  *   GET  /api/proof/:fixtureId?seq=&keys=  authed proxy → /scores/stat-validation
  *   GET  /api/odds/:fixtureId              KV rolling book of /odds/snapshot (60s refresh); failures serve 200 []
  *   GET  /api/stream                       per-request SSE proxy → /scores/stream
- *   GET  /api/replay/:fixtureId?speed=     SSE replay of the bundled recording
+ *   GET  /api/odds-stream                  per-request SSE proxy → /odds/stream
+ *   GET  /api/replay/:fixtureId?speed=     SSE replay of the bundled recording (+ odds interleave when bundled)
  *   POST /api/faucet {wallet}              0.02 SOL + 1000 USDC-dev transfer (KV rate limit)
  *   GET  /api/settlements                  KV-stored journal
  *   POST /api/settlements                  replace journal (X-Sync-Token required)
@@ -27,7 +28,7 @@ import {
   getOddsSnapshot,
   getUpstreamJson,
 } from "./txline";
-import { RECORDINGS, streamReplay } from "./replay";
+import { ODDS_RECORDINGS, RECORDINGS, streamReplay } from "./replay";
 import { handleFaucet } from "./faucet";
 
 const SETTLEMENTS_KV_KEY = "settlements";
@@ -56,6 +57,57 @@ function json(status: number, body: unknown, extraHeaders: Record<string, string
   });
 }
 
+/**
+ * Per-request SSE proxy: ONE upstream connection per client, bytes piped
+ * through verbatim (upstream heartbeats keep both hops alive). Shared by
+ * /api/stream (→ /scores/stream) and /api/odds-stream (→ /odds/stream) —
+ * the mechanics are identical, only the upstream path differs.
+ */
+async function proxyUpstreamSse(
+  env: Env,
+  ctx: ExecutionContext,
+  request: Request,
+  upstreamPath: string,
+): Promise<Response> {
+  let upstream: Response;
+  try {
+    upstream = await authedFetch(env, upstreamPath, {
+      headers: { Accept: "text/event-stream" },
+      noTimeout: true,
+      signal: request.signal,
+    });
+  } catch (err) {
+    return json(502, { error: `stream upstream failed: ${String(err)}` });
+  }
+  if (!upstream.ok || !upstream.body) {
+    await upstream.body?.cancel().catch(() => {});
+    return json(502, { error: `stream connect → HTTP ${upstream.status}` });
+  }
+  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+  const writer = writable.getWriter();
+  ctx.waitUntil(
+    (async () => {
+      try {
+        await writer.write(new TextEncoder().encode(": connected\n\n"));
+        writer.releaseLock();
+        await upstream.body!.pipeTo(writable);
+      } catch {
+        await upstream.body?.cancel().catch(() => {});
+        await writable.abort().catch(() => {});
+      }
+    })(),
+  );
+  return new Response(readable, {
+    status: 200,
+    headers: {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      "X-Accel-Buffering": "no",
+      ...CORS_HEADERS,
+    },
+  });
+}
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     startedAt ??= Date.now();
@@ -79,7 +131,8 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
     return json(parts.length === 0 ? 200 : 404, {
       service: "corner-case relay",
       endpoints: [
-        "GET /api/fixtures", "GET /api/stream", "GET /api/replay/:fixtureId?speed=30|max",
+        "GET /api/fixtures", "GET /api/stream", "GET /api/odds-stream",
+        "GET /api/replay/:fixtureId?speed=30|max",
         "GET /api/proof/:fixtureId?seq=N&keys=1,2", "GET /api/snapshot/:fixtureId",
         "GET /api/odds/:fixtureId", "POST /api/faucet {wallet}", "GET /api/settlements",
         "GET /api/health",
@@ -115,45 +168,13 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
     }
 
     case "stream": {
-      // Per-request proxy: ONE upstream /scores/stream per client, bytes piped
-      // through verbatim (upstream heartbeats keep both hops alive).
-      let upstream: Response;
-      try {
-        upstream = await authedFetch(env, "/scores/stream", {
-          headers: { Accept: "text/event-stream" },
-          noTimeout: true,
-          signal: request.signal,
-        });
-      } catch (err) {
-        return json(502, { error: `stream upstream failed: ${String(err)}` });
-      }
-      if (!upstream.ok || !upstream.body) {
-        await upstream.body?.cancel().catch(() => {});
-        return json(502, { error: `stream connect → HTTP ${upstream.status}` });
-      }
-      const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
-      const writer = writable.getWriter();
-      ctx.waitUntil(
-        (async () => {
-          try {
-            await writer.write(new TextEncoder().encode(": connected\n\n"));
-            writer.releaseLock();
-            await upstream.body!.pipeTo(writable);
-          } catch {
-            await upstream.body?.cancel().catch(() => {});
-            await writable.abort().catch(() => {});
-          }
-        })(),
-      );
-      return new Response(readable, {
-        status: 200,
-        headers: {
-          "Content-Type": "text/event-stream; charset=utf-8",
-          "Cache-Control": "no-cache, no-transform",
-          "X-Accel-Buffering": "no",
-          ...CORS_HEADERS,
-        },
-      });
+      return proxyUpstreamSse(env, ctx, request, "/scores/stream");
+    }
+
+    case "odds-stream": {
+      // Verbatim odds fan-in: the browser filters by FixtureId, exactly as
+      // it does for /api/stream. Odds are decoration — same proxy contract.
+      return proxyUpstreamSse(env, ctx, request, "/odds/stream");
     }
 
     case "replay": {
@@ -173,7 +194,9 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
           return json(400, { error: `invalid speed: ${speedParam}` });
         }
       }
-      const { response, done } = streamReplay(entries, speed, request.signal);
+      // Odds entries (when a <id>.odds.sse asset is bundled) interleave into
+      // the replay by Ts, tagged `event: odds`; none bundled → exact old path.
+      const { response, done } = streamReplay(entries, speed, request.signal, ODDS_RECORDINGS[param]);
       ctx.waitUntil(done);
       const headers = new Headers(response.headers);
       for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v);

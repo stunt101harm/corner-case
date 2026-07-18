@@ -10,10 +10,12 @@
  */
 
 import { useCallback, useRef, useState } from "react";
+import { useConnection } from "@solana/wallet-adapter-react";
 import { isAggregationProof, verifyLegs, type LegResult } from "@/lib/merkle";
+import { MatchFingerprint } from "@/components/MatchFingerprint";
 import { statKeyName } from "@/lib/strategy";
 import { explorerAddress, explorerTx } from "@/lib/constants";
-import { deriveTxlineRootsPda, type PlainSettlePayload } from "@/lib/program";
+import { deriveTxlineRootsPda, fetchRootsAccountData, type PlainSettlePayload } from "@/lib/program";
 
 const STEP_ANIMATION_MS = 220;
 
@@ -30,6 +32,7 @@ export function MerkleChain({
   home?: string;
   away?: string;
 }): React.ReactNode {
+  const { connection } = useConnection();
   const [legs, setLegs] = useState<LegResult[] | null>(null);
   const [revealed, setRevealed] = useState(0);
   const [running, setRunning] = useState(false);
@@ -42,16 +45,35 @@ export function MerkleChain({
   const recomputedHashes = legs
     ? legs.filter((l) => !l.aggregated).reduce((n, l) => n + l.steps.length, 0)
     : 0;
+  // Leg 3 present ⇒ the chain reached the on-chain account bytes.
+  const onChainVerified = (legs?.length ?? 0) > payload.stats.length + 1;
 
   const reverify = useCallback(async (): Promise<void> => {
     if (timerRef.current) clearInterval(timerRef.current);
     setRunning(true);
     setRevealed(0);
+    // Leg 3: fetch TxLINE's on-chain daily-roots account so the chain
+    // verifies all the way to the bytes TxLINE posted. Best-effort — a
+    // fetch failure just falls back to legs 1+2.
+    let rootsAccountData: Uint8Array | undefined;
+    try {
+      rootsAccountData = (await fetchRootsAccountData(connection, epochDay)) ?? undefined;
+    } catch {
+      rootsAccountData = undefined;
+    }
     const result = await verifyLegs({
       stats: payload.stats,
       eventStatRoot: payload.eventStatRoot,
       subTreeProof: payload.fixtureProof,
       eventsSubTreeRoot: payload.eventsSubTreeRoot,
+      summary: {
+        fixtureId: payload.fixtureId,
+        updateCount: payload.updateCount,
+        minTimestamp: payload.minTimestamp,
+        maxTimestamp: payload.maxTimestamp,
+      },
+      mainTreeProof: payload.mainTreeProof,
+      rootsAccountData,
     });
     setLegs(result.legs);
     // Recomputation is instant; the reveal is paced so each sha256 step is
@@ -67,7 +89,7 @@ export function MerkleChain({
         setRunning(false);
       }
     }, STEP_ANIMATION_MS);
-  }, [payload]);
+  }, [payload, connection, epochDay]);
 
   // Steps revealed before this leg starts, for the animation offsets.
   const legOffset = (index: number): number =>
@@ -94,7 +116,8 @@ export function MerkleChain({
           }`}
         >
           {allOk
-            ? `✓ Recomputed ${recomputedHashes + aggregatedCount} sha256 hash${recomputedHashes + aggregatedCount === 1 ? "" : "es"} in this browser — every node matches the proof.` +
+            ? `✓ Recomputed ${recomputedHashes + aggregatedCount} sha256 hash${recomputedHashes + aggregatedCount === 1 ? "" : "es"} in this browser — every node matches the proof` +
+              (onChainVerified ? ", down to the exact bytes of TxLINE's on-chain root account." : ".") +
               (aggregatedCount > 0
                 ? ` ${aggregatedCount} zero-value stat${aggregatedCount > 1 ? "s" : ""} verified by non-membership against the committed presence bitmap (a TxLINE scheme we reverse-engineered — see FEEDBACK.md).`
                 : "")
@@ -141,6 +164,12 @@ export function MerkleChain({
                         bitmap decodes {legs[si].nonMembership!.presentKeys.length} non-zero
                         stats for this match: {legs[si].nonMembership!.presentKeys.join(", ")}
                       </p>
+                      <MatchFingerprint
+                        presentKeys={legs[si].nonMembership!.presentKeys}
+                        absentKey={stat.key}
+                        home={home}
+                        away={away}
+                      />
                     </>
                   ) : (
                     <p className="text-chalk/50">click Re-verify to recompute this leg</p>
@@ -190,36 +219,62 @@ export function MerkleChain({
           title="Fixture subtree root"
           subtitle={`bound to fixture ${payload.fixtureId}${home ? ` (${home} v ${away})` : ""} — a proof from any other match cannot land here`}
           hex={hexOf(payload.eventsSubTreeRoot)}
-          checked={legs !== null && revealed >= totalSteps}
+          checked={legs !== null && revealed >= legOffset(payload.stats.length + 1)}
           ok={legs?.[payload.stats.length]?.ok}
         />
 
-        {/* Leg 3: main tree — on-chain verified */}
-        {payload.mainTreeProof.map((node, i) => (
-          <ProofStep
-            key={i}
-            siblingHex={hexOf(node.hash)}
-            isRightSibling={node.isRightSibling}
-            onChain
-          />
-        ))}
+        {/* Leg 3: fixture summary → main tree → on-chain account bytes,
+            recomputed in-browser (leg index = stats.length + 1 when present). */}
+        {(() => {
+          const leg3 = legs?.[payload.stats.length + 1];
+          return (
+            <>
+              {(leg3?.steps ?? skeletonSteps(payload.mainTreeProof)).map((step, i) => (
+                <ProofStep
+                  key={i}
+                  siblingHex={step.siblingHex}
+                  isRightSibling={step.isRightSibling}
+                  resultHex={step.resultHex}
+                  revealed={
+                    leg3 != null && revealed > legOffset(payload.stats.length + 1) + i + 1
+                  }
+                  ok={leg3?.ok}
+                />
+              ))}
 
-        <NodeCard
-          tone="chain"
-          title={`daily_scores_roots · epoch day ${epochDay}`}
-          subtitle="TxLINE's attested on-chain root account"
-          link={{ href: explorerAddress(rootsPda), label: rootsPda }}
-        />
+              <NodeCard
+                tone="chain"
+                title={`daily_scores_roots · epoch day ${epochDay}`}
+                subtitle={
+                  leg3
+                    ? leg3.ok
+                      ? "✓ recomputed root === the bytes TxLINE posted on-chain"
+                      : "✕ recomputed root does not match the on-chain bytes"
+                    : "TxLINE's attested on-chain root account — fetched + compared on Re-verify"
+                }
+                hex={leg3?.computedHex}
+                checked={leg3 != null && revealed >= totalSteps}
+                ok={leg3?.ok}
+                link={{ href: explorerAddress(rootsPda), label: rootsPda }}
+              />
+            </>
+          );
+        })()}
       </div>
 
       <p className="mt-3 text-xs leading-relaxed text-chalk/50">
-        Legs 1–2 (leaves → fixture subtree) recompute above with WebCrypto sha256:
-        leaf = sha256(key·value·period as 12 LE bytes), step = sha256(left‖right) with sibling
-        placement from the proof. The final leg into the daily root was{" "}
-        <a href={explorerTx(txSig)} target="_blank" rel="noreferrer" className="text-turf-400 underline underline-offset-2">
-          verified on-chain by TxLINE&apos;s program in this transaction ↗
+        The <em>entire</em> chain recomputes in your browser with WebCrypto sha256 — stat leaves
+        (12 LE bytes each), the non-membership presence bitmap for zero-value stats, the fixture
+        summary leaf (<code>sha256(0x01‖borsh(summary))</code>), all the way to the exact 32 bytes
+        at this epoch day&apos;s 5-minute slot of TxLINE&apos;s on-chain{" "}
+        <a href={explorerAddress(rootsPda)} target="_blank" rel="noreferrer" className="text-turf-400 underline underline-offset-2">
+          daily_scores_roots account ↗
         </a>
-        {" "}— the settlement could not have executed otherwise.
+        . Independently, that same proof was{" "}
+        <a href={explorerTx(txSig)} target="_blank" rel="noreferrer" className="text-turf-400 underline underline-offset-2">
+          verified by TxLINE&apos;s program in the settlement transaction ↗
+        </a>
+        . Every undocumented layer here was reverse-engineered — see FEEDBACK.md.
       </p>
     </div>
   );
