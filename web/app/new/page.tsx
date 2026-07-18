@@ -32,6 +32,7 @@ import { savePropContext } from "@/lib/receiptCache";
 import { humanizeError } from "@/lib/errors";
 import { useToast } from "@/components/Toasts";
 import { FixtureBadge } from "@/components/StateBadge";
+import { OddsStrip } from "@/components/OddsStrip";
 
 export default function NewMarketPage(): React.ReactNode {
   // useSearchParams requires a Suspense boundary for the static build.
@@ -178,6 +179,19 @@ function Builder(): React.ReactNode {
               </button>
             );
           })}
+        </div>
+        {/* Consensus odds for the selected fixture — silently absent when
+            TxLINE has none (demo/finished fixtures). For the win templates it
+            adds the 1:1-vs-consensus expected-value context line. */}
+        <div className="mt-2">
+          <OddsStrip
+            fixtureId={fixtureId}
+            home={fixture.home}
+            away={fixture.away}
+            highlightSide={
+              template.id === "home-wins" ? "home" : template.id === "away-wins" ? "away" : null
+            }
+          />
         </div>
       </section>
 

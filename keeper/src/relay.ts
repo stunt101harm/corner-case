@@ -47,6 +47,8 @@ const USDC_DEV_MINT = new PublicKey("Cx9Y63x8YN7x9UMFba4B1HdmmmH9QVZbvTZgz7k8ksp
 const DEFAULT_RPC_URL = "https://api.devnet.solana.com";
 
 const FIXTURES_REFRESH_MS = 5 * 60_000;
+const ODDS_FRESH_MS = 60_000;
+const ODDS_RETENTION_MS = 6 * 3600_000;
 const SSE_HEARTBEAT_MS = 15_000;
 const FAUCET_WINDOW_MS = 10 * 60_000;
 const FAUCET_SOL_LAMPORTS = 50_000_000; // 0.05 SOL — fees + rent for a few markets
@@ -175,6 +177,73 @@ export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
   await refreshFixtures();
   const refreshTimer = setInterval(() => void refreshFixtures(), FIXTURES_REFRESH_MS);
   refreshTimer.unref?.();
+
+  // -- odds cache -----------------------------------------------------------
+
+  /**
+   * fixtureId → rolling odds book. TxLINE's /odds/snapshot returns only the
+   * LATEST update batch (verified live: every entry shares one Ts, and a
+   * later poll returns a different, smaller set) — so a pure proxy would make
+   * the 1X2 consensus flicker in and out between polls. Instead each refresh
+   * merges the batch into a per-fixture book keyed by market identity
+   * (type + period + parameters), newest Ts wins. The response is still an
+   * array of verbatim upstream entries — consumers cannot tell the difference,
+   * they just see the whole current book.
+   *
+   * Odds are decoration on top of markets, so this endpoint must NEVER break
+   * a page: upstream failures serve the existing book, else 200 []. Finished
+   * fixtures legitimately return [] upstream (verified on 18241006).
+   */
+  const oddsCache = new Map<string, { at: number; book: Map<string, { ts: number; entry: unknown }> }>();
+
+  function mergeOddsBatch(
+    book: Map<string, { ts: number; entry: unknown }>,
+    batch: unknown[],
+  ): void {
+    for (const entry of batch) {
+      if (!entry || typeof entry !== "object") continue;
+      const e = entry as { SuperOddsType?: unknown; MarketPeriod?: unknown; MarketParameters?: unknown; Ts?: unknown };
+      if (typeof e.SuperOddsType !== "string") continue;
+      const key = `${e.SuperOddsType}|${String(e.MarketPeriod ?? "")}|${String(e.MarketParameters ?? "")}`;
+      const ts = typeof e.Ts === "number" ? e.Ts : 0;
+      const prev = book.get(key);
+      if (!prev || ts >= prev.ts) book.set(key, { ts, entry });
+    }
+    // Retention: a market the bookmaker stopped quoting hours ago is gone.
+    const cutoff = Date.now() - ODDS_RETENTION_MS;
+    for (const [key, v] of book) {
+      if (v.ts !== 0 && v.ts < cutoff) book.delete(key);
+    }
+  }
+
+  async function getOdds(fixtureId: string): Promise<unknown[]> {
+    let cached = oddsCache.get(fixtureId);
+    if (!cached) {
+      // Bound the map — the endpoint accepts any numeric id, and a scraper
+      // must not grow relay memory forever.
+      if (oddsCache.size >= 200) {
+        const oldest = oddsCache.keys().next().value;
+        if (oldest !== undefined) oddsCache.delete(oldest);
+      }
+      cached = { at: 0, book: new Map() };
+      oddsCache.set(fixtureId, cached);
+    }
+    if (Date.now() - cached.at >= ODDS_FRESH_MS) {
+      // Stamp first: success or failure, the next 60s serve from the book —
+      // an upstream outage costs one attempt per fixture per window, not one
+      // per request.
+      cached.at = Date.now();
+      try {
+        const res = await auth.authedFetch(`/odds/snapshot/${fixtureId}`);
+        if (!res.ok) throw new Error(`GET /odds/snapshot/${fixtureId} → HTTP ${res.status}`);
+        const body = (await res.json()) as unknown;
+        mergeOddsBatch(cached.book, Array.isArray(body) ? (body as unknown[]) : []);
+      } catch (err) {
+        console.error(`[relay] odds refresh failed for ${fixtureId} (serving ${cached.book.size ? "stale book" : "empty"}): ${String(err)}`);
+      }
+    }
+    return [...cached.book.values()].map((v) => v.entry);
+  }
 
   // -- faucet ---------------------------------------------------------------
 
@@ -416,7 +485,8 @@ export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
         endpoints: [
           "GET /api/fixtures", "GET /api/stream", "GET /api/replay/:fixtureId?speed=30|max",
           "GET /api/proof/:fixtureId?seq=N&keys=1,2", "GET /api/snapshot/:fixtureId",
-          "POST /api/faucet {wallet}", "GET /api/settlements", "GET /api/health",
+          "GET /api/odds/:fixtureId", "POST /api/faucet {wallet}", "GET /api/settlements",
+          "GET /api/health",
         ],
       });
       return;
@@ -539,6 +609,16 @@ export async function startRelay(opts: RelayOptions = {}): Promise<Relay> {
         } catch (err) {
           sendJson(res, 502, { error: `snapshot upstream failed: ${String(err)}` });
         }
+        return;
+      }
+
+      case "odds": {
+        if (!param || !/^\d+$/.test(param)) {
+          sendJson(res, 400, { error: "usage: /api/odds/:fixtureId" });
+          return;
+        }
+        // Always 200: odds are decoration and must never break a page.
+        sendJson(res, 200, await getOdds(param));
         return;
       }
 

@@ -9,6 +9,7 @@
  *   GET  /api/fixtures                     KV-cached TxLINE snapshot, serve-stale, hardcoded fallback
  *   GET  /api/snapshot/:fixtureId          authed proxy → /scores/snapshot/:id
  *   GET  /api/proof/:fixtureId?seq=&keys=  authed proxy → /scores/stat-validation
+ *   GET  /api/odds/:fixtureId              KV rolling book of /odds/snapshot (60s refresh); failures serve 200 []
  *   GET  /api/stream                       per-request SSE proxy → /scores/stream
  *   GET  /api/replay/:fixtureId?speed=     SSE replay of the bundled recording
  *   POST /api/faucet {wallet}              0.02 SOL + 1000 USDC-dev transfer (KV rate limit)
@@ -23,6 +24,7 @@ import {
   UPSTREAM_AUTH_KV_KEY,
   authedFetch,
   getFixtures,
+  getOddsSnapshot,
   getUpstreamJson,
 } from "./txline";
 import { RECORDINGS, streamReplay } from "./replay";
@@ -79,7 +81,8 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
       endpoints: [
         "GET /api/fixtures", "GET /api/stream", "GET /api/replay/:fixtureId?speed=30|max",
         "GET /api/proof/:fixtureId?seq=N&keys=1,2", "GET /api/snapshot/:fixtureId",
-        "POST /api/faucet {wallet}", "GET /api/settlements", "GET /api/health",
+        "GET /api/odds/:fixtureId", "POST /api/faucet {wallet}", "GET /api/settlements",
+        "GET /api/health",
       ],
     });
   }
@@ -212,6 +215,14 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
       } catch (err) {
         return json(502, { error: `snapshot upstream failed: ${String(err)}` });
       }
+    }
+
+    case "odds": {
+      if (!param || !/^\d+$/.test(param)) {
+        return json(400, { error: "usage: /api/odds/:fixtureId" });
+      }
+      // Always 200: odds are decoration and must never break a page.
+      return json(200, await getOddsSnapshot(env, param));
     }
 
     case "faucet": {

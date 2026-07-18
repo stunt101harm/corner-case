@@ -19,6 +19,11 @@ const UPSTREAM_TIMEOUT_MS = 15_000;
 export const FIXTURES_KV_KEY = "txline:fixtures";
 export const UPSTREAM_AUTH_KV_KEY = "meta:upstreamAuth";
 export const FIXTURES_FRESH_MS = 5 * 60_000;
+export const ODDS_FRESH_MS = 60_000;
+/** Book entries older than this are dropped — a pulled market must not linger. */
+const ODDS_RETENTION_MS = 6 * 3600_000;
+/** The whole per-fixture book expires from KV after a day untouched. */
+const ODDS_KV_TTL_SECONDS = 86_400;
 
 /** Field names mirror the API exactly (same contract as keeper/src/txline.ts). */
 export interface FixtureMeta {
@@ -118,6 +123,59 @@ export async function getUpstreamJson<T>(env: Env, path: string): Promise<T> {
     throw new Error(`GET ${path} → HTTP ${res.status}${body ? `: ${body}` : ""}`);
   }
   return (await res.json()) as T;
+}
+
+interface OddsCacheEntry {
+  at: number;
+  /** Market identity ("type|period|params") → { ts, entry: verbatim upstream entry }. */
+  book: Record<string, { ts: number; entry: unknown }>;
+}
+
+/**
+ * Rolling odds book for one fixture (mirrors keeper/src/relay.ts getOdds).
+ *
+ * TxLINE's /odds/snapshot returns only the LATEST update batch (verified
+ * live: every entry shares one Ts and later polls return different, smaller
+ * sets), so a pure proxy would make the 1X2 consensus flicker in and out.
+ * Each refresh merges the batch into a KV-stored book keyed by market
+ * identity (type + period + parameters), newest Ts wins, 6h retention. The
+ * response stays an array of verbatim upstream entries.
+ *
+ * Odds are pure decoration, so this NEVER throws — upstream failures serve
+ * the existing book, else []. Finished fixtures legitimately return []
+ * upstream (verified on 18241006); that is a valid answer, not an error.
+ */
+export async function getOddsSnapshot(env: Env, fixtureId: string): Promise<unknown[]> {
+  const key = `txline:odds:${fixtureId}`;
+  const cached = (await env.KV.get(key, "json").catch(() => null)) as OddsCacheEntry | null;
+  const book: OddsCacheEntry["book"] =
+    cached && typeof cached.book === "object" && cached.book !== null ? cached.book : {};
+  if (cached && Date.now() - cached.at < ODDS_FRESH_MS) {
+    return Object.values(book).map((v) => v.entry);
+  }
+  try {
+    const body = await getUpstreamJson<unknown>(env, `/odds/snapshot/${fixtureId}`);
+    for (const raw of Array.isArray(body) ? (body as unknown[]) : []) {
+      if (!raw || typeof raw !== "object") continue;
+      const e = raw as { SuperOddsType?: unknown; MarketPeriod?: unknown; MarketParameters?: unknown; Ts?: unknown };
+      if (typeof e.SuperOddsType !== "string") continue;
+      const marketKey = `${e.SuperOddsType}|${String(e.MarketPeriod ?? "")}|${String(e.MarketParameters ?? "")}`;
+      const ts = typeof e.Ts === "number" ? e.Ts : 0;
+      const prev = book[marketKey];
+      if (!prev || ts >= prev.ts) book[marketKey] = { ts, entry: raw };
+    }
+    const cutoff = Date.now() - ODDS_RETENTION_MS;
+    for (const [k, v] of Object.entries(book)) {
+      if (v.ts !== 0 && v.ts < cutoff) delete book[k];
+    }
+    // A KV write hiccup must not turn a good upstream answer into [].
+    await env.KV.put(key, JSON.stringify({ at: Date.now(), book } satisfies OddsCacheEntry), {
+      expirationTtl: ODDS_KV_TTL_SECONDS,
+    }).catch(() => {});
+  } catch (err) {
+    console.error(`[relay] odds refresh failed for ${fixtureId} (serving ${Object.keys(book).length ? "stale book" : "empty"}): ${String(err)}`);
+  }
+  return Object.values(book).map((v) => v.entry);
 }
 
 interface FixturesCacheEntry {

@@ -37,6 +37,7 @@ import { fmtKickoff, fmtUsdc, shortAddr } from "@/lib/format";
 import { DEMO_FIXTURE_ID, epochDayFromMs, explorerAddress, explorerTx } from "@/lib/constants";
 import { LiveMatch, type TrackerSpec } from "@/components/LiveMatch";
 import { StateBadge, FixtureBadge } from "@/components/StateBadge";
+import { OddsStrip } from "@/components/OddsStrip";
 import { useToast } from "@/components/Toasts";
 
 export default function MarketPage(): React.ReactNode {
@@ -281,6 +282,10 @@ function MarketDetail({ marketPk }: { marketPk: PublicKey }): React.ReactNode {
         <StateBadge state={view.stateName} />
         <FixtureBadge status={view.fixture.status} />
       </div>
+
+      {/* Consensus odds for this market's fixture — silently absent when
+          TxLINE has none (finished fixtures return an empty snapshot). */}
+      <OddsStrip fixtureId={view.fixtureId} home={view.fixture.home} away={view.fixture.away} />
 
       <div className="grid gap-4 lg:grid-cols-[1fr_320px]">
         {/* Prop details */}
