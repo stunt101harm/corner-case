@@ -1,0 +1,19 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+body{margin:0;height:100vh;display:flex;flex-direction:column;justify-content:center;align-items:center;background:#0a120c;color:#e8f5ec;font-family:-apple-system,Helvetica,sans-serif}
+h1{font-size:40px;margin-bottom:28px}h1 span{color:#4ade80}
+table{border-collapse:collapse;font-size:22px;max-width:1100px}
+td,th{border:1px solid #23402d;padding:14px 20px;text-align:left}
+th{color:#4ade80;text-transform:uppercase;font-size:16px;letter-spacing:1px}
+td:first-child{color:#4ade80;font-weight:bold;white-space:nowrap}
+td:last-child{color:#9fb8a8}
+</style></head><body>
+<h1>Five check gates — <span>each attack fails on-chain</span></h1>
+<table>
+<tr><th>Gate</th><th>Prevents</th></tr>
+<tr><td>1 · Kickoff deadline</td><td>betting on known outcomes after the whistle</td></tr>
+<tr><td>2 · Finality (period=100)</td><td>settling "no red cards" at minute 60 with a mid-match proof</td></tr>
+<tr><td>3 · Epoch window</td><td>shopping arbitrary historical daily roots</td></tr>
+<tr><td>4 · Fixture binding</td><td>a valid proof from a different match settling this market</td></tr>
+<tr><td>5 · Stat-key binding</td><td>a valid proof of the WRONG stats flipping the payout</td></tr>
+</table>
+</body></html>
